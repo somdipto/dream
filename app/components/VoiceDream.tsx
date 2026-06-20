@@ -24,6 +24,7 @@ import {
 } from "../lib/style-presets";
 import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
 import { dreamBus } from "../lib/event-bus";
+import { recordBlackScreen } from "../lib/black-screen-log";
 import { parseVoiceStyle } from "../lib/voice-style-parser";
 import { captureCurrentFrame } from "../lib/pose-lock";
 
@@ -241,6 +242,14 @@ export function VoiceDream() {
           } else {
             // eslint-disable-next-line no-console
             console.warn("[dream] seed upload timed out — aborting paint");
+            recordBlackScreen({
+              source: "seed-upload-timeout",
+              prompt: text,
+              seed,
+              sessionId: null,
+              luma: null,
+              note: "setImage never confirmed within 6s",
+            });
           }
           if (!imageAccepted) {
             return "err";
@@ -275,6 +284,14 @@ export function VoiceDream() {
         if (!generating) setPhase("idle");
       } else {
         setError("Reactor is slow — your prompt is saved. The world may still be painting in the background.");
+        recordBlackScreen({
+          source: "render-timeout",
+          prompt: text,
+          seed,
+          sessionId: null,
+          luma: null,
+          note: "pipeline Promise.race hit 8s timeout",
+        });
         if (!generating) setPhase("idle");
       }
       inFlightRef.current = false;

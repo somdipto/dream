@@ -20,6 +20,12 @@ import { generateSeedImage } from "./lib/seed-image";
 import { composeScenePrompt } from "./lib/scene-composer";
 import { dailyDream, dailyDreamTitle } from "./lib/curated-scenes";
 import { dreamBus } from "./lib/event-bus";
+import {
+  blackScreenLogCount,
+  getBlackScreenLog,
+  clearBlackScreenLog,
+  type BlackScreenEvent,
+} from "./lib/black-screen-log";
 import { classifyReactorError } from "./lib/reactor-errors";
 import { bustNextToken, consumeBust } from "./lib/token-bust";
 import { loadUserKey, getFingerprint, saveUserKey as _saveUserKey, clearUserKey as _clearUserKey } from "./lib/byok";
@@ -202,6 +208,101 @@ function ByokKeyField({ onChanged }: { onChanged?: () => void }) {
             .
           </p>
         </form>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// M9.16: Black-screen memory chip — a small indicator on the Begin
+// overlay that surfaces when the persistent log has at least one
+// event. Tapping it opens a panel listing the recent events with
+// timestamps and a Clear button. Hidden when the log is empty so
+// the first-time user sees no extra chrome.
+// ---------------------------------------------------------------------------
+function BlackScreenMemoryChip() {
+  const [open, setOpen] = useState(false);
+  const [events, setEvents] = useState<BlackScreenEvent[]>([]);
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    setCount(blackScreenLogCount());
+    if (open) setEvents(getBlackScreenLog());
+  }, [open]);
+
+  // Refresh count every 5s while closed, so a long-lived dark
+  // frame recorded by the watchdog surfaces in the chip without
+  // requiring a Begin-overlay remount.
+  useEffect(() => {
+    if (open) return;
+    const t = window.setInterval(() => setCount(blackScreenLogCount()), 5000);
+    return () => window.clearInterval(t);
+  }, [open]);
+
+  if (count === 0) return null;
+
+  return (
+    <div className="mt-3 w-full max-w-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        data-testid="black-screen-chip"
+        className="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-500/15 px-3 py-1.5 text-[11px] text-amber-100 backdrop-blur hover:bg-amber-500/25"
+      >
+        <span aria-hidden="true">●</span>
+        <span>
+          {count} black-screen event{count === 1 ? "" : "s"} remembered
+        </span>
+      </button>
+      {open && (
+        <div
+          className="mt-2 max-h-64 overflow-y-auto rounded-2xl border border-white/10 bg-black/60 p-3 text-left text-[11px] text-white/85 backdrop-blur"
+          data-testid="black-screen-panel"
+        >
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-white/65">Recent black-screen events</span>
+            <button
+              type="button"
+              onClick={() => {
+                clearBlackScreenLog();
+                setEvents([]);
+                setCount(0);
+                setOpen(false);
+              }}
+              className="rounded-full border border-white/15 px-2 py-0.5 text-[10px] text-white/70 hover:bg-white/10"
+              data-testid="black-screen-clear"
+            >
+              Clear
+            </button>
+          </div>
+          {events.length === 0 ? (
+            <p className="text-white/45">No events.</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {events
+                .slice()
+                .reverse()
+                .map((e, i) => (
+                  <li
+                    key={`${e.ts}-${i}`}
+                    className="rounded-md border border-white/5 bg-white/5 px-2 py-1.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-amber-200">
+                        {e.source}
+                      </span>
+                      <span className="text-white/40">
+                        {new Date(e.ts).toLocaleTimeString()}
+                      </span>
+                    </div>
+                    {e.note && (
+                      <div className="mt-0.5 text-white/55">{e.note}</div>
+                    )}
+                  </li>
+                ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );
@@ -474,6 +575,7 @@ function DreamSurface() {
             Begin
           </button>
           <ByokKeyField />
+          <BlackScreenMemoryChip />
           <p className="mt-6 text-[10px] uppercase tracking-wider text-white/40">
             Powered by Reactor · LingBot
           </p>

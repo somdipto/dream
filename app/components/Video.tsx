@@ -6,6 +6,7 @@ import {
   useLingbot,
   useLingbotState,
 } from "@reactor-models/lingbot";
+import { recordBlackScreen } from "../lib/black-screen-log";
 
 // Full-bleed background video. `<LingbotMainVideoView>` is a pre-bound
 // `<ReactorView track="main_video">` from the typed SDK — no refs, no
@@ -127,11 +128,26 @@ export function Video() {
       setDarkFrames(false);
       return;
     }
+    // Throttle log writes so a long-lived dark stream doesn't
+    // flood the log with one event per second. One event per
+    // dark episode is enough.
+    const darkSinceRef = { current: 0 };
     function sampleDark() {
       const v = document.querySelector('[data-testid="video-stage"] video');
       if (!(v instanceof HTMLVideoElement)) return;
       if (v.videoWidth === 0 || v.videoHeight === 0) {
         setDarkFrames(true);
+        if (!darkSinceRef.current) {
+          darkSinceRef.current = Date.now();
+          recordBlackScreen({
+            source: "dark-frame-watchdog",
+            prompt: null,
+            seed: null,
+            sessionId: null,
+            luma: null,
+            note: "video element has 0x0 dimensions — likely never started",
+          });
+        }
         return;
       }
       try {
@@ -148,8 +164,21 @@ export function Video() {
           luma += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
         }
         const avg = luma / 4;
-        // Below 22/255 = very dark. Above 32 = clearly lit.
-        setDarkFrames(avg < 22);
+        const dark = avg < 22;
+        setDarkFrames(dark);
+        if (dark && !darkSinceRef.current) {
+          darkSinceRef.current = Date.now();
+          recordBlackScreen({
+            source: "dark-frame-watchdog",
+            prompt: null,
+            seed: null,
+            sessionId: null,
+            luma: avg,
+            note: `sampled luma ${avg.toFixed(1)}/255`,
+          });
+        } else if (!dark && darkSinceRef.current) {
+          darkSinceRef.current = 0;
+        }
       } catch {
         // CORS-tainted canvas — assume fine.
         setDarkFrames(false);
