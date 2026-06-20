@@ -10,6 +10,7 @@ import { GyroController } from "./components/GyroController";
 import { DesktopController } from "./components/DesktopController";
 import { DesktopDream } from "./components/DesktopDream";
 import { SessionSidebar } from "./components/SessionSidebar";
+import { VRView } from "./components/VRView";
 import { SessionProvider, useSessions } from "./components/SessionProvider";
 import { useMotion } from "./hooks/useMotion";
 import { useVoice } from "./hooks/useVoice";
@@ -57,6 +58,7 @@ function DreamSurface() {
   const sessions = useSessions();
   const [hasBegun, setHasBegun] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [vrMode, setVrMode] = useState(false);
   const [pruneToast, setPruneToast] = useState<string | null>(null);
 
   // Show a non-blocking toast when localStorage is full and we prune.
@@ -210,8 +212,10 @@ function DreamSurface() {
         }}
       />
 
-      {/* Top bar — connection state + session toggle + new + reset. */}
-      <div className="pointer-events-none fixed inset-x-0 top-0 z-20 flex items-start justify-between gap-3 p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+      {/* Top bar — connection state + session toggle + new + reset.
+          Hidden in VR mode (the immersive view takes over). */}
+      {!vrMode && (
+        <div className="pointer-events-none fixed inset-x-0 top-0 z-20 flex items-start justify-between gap-3 p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <div className="pointer-events-auto flex flex-col items-start gap-2">
           <div className="flex items-center gap-2">
             <button
@@ -266,15 +270,29 @@ function DreamSurface() {
           >
             Reset
           </button>
+          {platform.isMobile && (
+            <button
+              onClick={() => setVrMode(true)}
+              aria-label="Enter VR mode"
+              data-testid="vr-btn"
+              className="grid h-10 w-10 place-items-center rounded-full border border-violet-400/40 bg-violet-500/20 text-base text-violet-100 backdrop-blur hover:bg-violet-500/30"
+            >
+              ◐
+            </button>
+          )}
         </div>
       </div>
+      )}
 
-      {/* Bottom — voice UI on mobile, text + paint on desktop. */}
+      {/* Bottom — voice UI on mobile, text + paint on desktop.
+          Hidden in VR mode. */}
+      {!vrMode && (
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex justify-center p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <div className="w-full max-w-md">
           {platform.isMobile ? <VoiceDream /> : <DesktopDream />}
         </div>
       </div>
+      )}
 
       {/* Headless controllers — run while connected. */}
       {platform.isMobile ? (
@@ -295,6 +313,13 @@ function DreamSurface() {
         <div className="pointer-events-none fixed left-1/2 top-20 z-50 -translate-x-1/2 rounded-full border border-amber-400/40 bg-amber-500/20 px-4 py-1.5 text-xs text-amber-100 shadow-lg backdrop-blur">
           {pruneToast}
         </div>
+      )}
+
+      {/* VR mode — fullscreen overlay. Renders two side-by-side
+          lenses for stereoscopic viewing. Mobile-only (the toggle
+          button is hidden on desktop). */}
+      {vrMode && platform.isMobile && (
+        <VRView open={vrMode} onClose={() => setVrMode(false)} />
       )}
     </main>
   );

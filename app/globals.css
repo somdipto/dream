@@ -72,3 +72,50 @@ html.cursor-hidden input,
 html.cursor-hidden textarea {
   cursor: text;
 }
+
+/* ── VR stereo view ───────────────────────────────────────────────
+ *
+ * Two side-by-side lenses, each showing the same world video with
+ * a small horizontal parallax shift. The brain fuses the two
+ * slightly offset images into a single 3D scene — the Cardboard
+ * effect.
+ *
+ * Parallax: each eye is shifted by 3% of its own width toward the
+ * outside (left eye further left, right eye further right). This
+ * is the inverse of the human interpupillary distance (~64 mm)
+ * projected onto a typical phone FOV (~60°).
+ *
+ * Barrel distortion: Cardboard lenses introduce pin-cushion
+ * distortion, so we apply a soft barrel via the inline SVG filter
+ * #vr-barrel (declared in VRView.tsx). The displacement scale is
+ * deliberately small so we don't soften the painted world. */
+
+.vr-lens-left .vr-barrel {
+  transform: translateX(-3%);
+  will-change: transform;
+}
+.vr-lens-right .vr-barrel {
+  transform: translateX(3%);
+  will-change: transform;
+}
+.vr-barrel {
+  filter: url(#vr-barrel);
+  /* Inherit the height/width of the parent lens (each .vr-barrel
+     is the inner wrapper inside the lens div). */
+  height: 100%;
+  width: 100%;
+}
+
+/* Divider line between the two lenses. A thin black line keeps
+ * the user's eyes from drifting into the wrong half. */
+.vr-lens-left::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
+  width: 1px;
+  background: rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  z-index: 2;
+}
