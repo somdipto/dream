@@ -5,48 +5,60 @@ import {
   useLingbot,
   useLingbotState,
   useLingbotImageAccepted,
+  useLingbotGenerationReset,
   type LingbotStateMessage,
 } from "@reactor-models/lingbot";
 import { useVoice } from "../hooks/useVoice";
 import { generateSeedImage } from "../lib/seed-image";
-import { composeScenePrompt, composeMutationPrompt } from "../lib/scene-composer";
+import { composeScenePrompt } from "../lib/scene-composer";
 
 // The single hero surface of the app.
 //
-// Flow (revised — real-time voice → world):
+// Flow (M3 — "blank canvas every prompt"):
 //
 //   1. User taps "Begin". Mic arms. Status pill flips to "Listening".
 //   2. User speaks. Interim transcript is rendered live so they can see
 //      what the engine heard.
 //   3. The moment the engine commits a final, the *whole transcript so
 //      far* is composed into a full scene prompt and sent to Lingbot
-//      — no manual "Send" tap. The world mutates as they speak.
-//   4. On the first phrase: a fresh procedural seed image is generated
-//      client-side, uploaded to Reactor, setImage + setPrompt + start.
-//      On every subsequent phrase: just setPrompt. Lingbot picks it up
-//      on the next chunk boundary, no restart needed.
-//   5. Tilt to walk (GyroController). The user can keep speaking — the
+//      — no manual "Send" tap.
+//   4. On EVERY phrase (first and every subsequent):
+//        reset() → generate fresh procedural seed image
+//                 → upload → setImage (wait for image_accepted)
+//                 → setPrompt (wait for conditions_ready)
+//                 → start()
+//      The world is *reborn* from a clean anchor every time. No template
+//      image persists between phrases. Same prompt twice → different
+//      image (session nonce + prompt hash).
+//   5. The cost is a visible 1–2 s blank frame between reset and the new
+//      first chunk. That's the user's "blank canvas" requirement.
+//   6. Tilt to walk (GyroController). The user can keep speaking — the
 //      mic stays armed.
-//
-// The procedural seed image is a different gradient + noise + accent
-// on every reload, and is keyed off the prompt hash. So no two sessions
-// (and no two prompts) ever look the same.
-
-const RETRY_BASE_MS = 1200;
 
 export function VoiceDream() {
-  const { status, uploadFile, setImage, setPrompt, start } = useLingbot();
+  const { status, uploadFile, setImage, setPrompt, start, reset } = useLingbot();
   const [snapshot, setSnapshot] = useState<LingbotStateMessage | null>(null);
   const voice = useVoice();
   const [phase, setPhase] = useState<"idle" | "loading" | "live">("idle");
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pulse, setPulse] = useState(0); // increments on every send → animates "live" indicator
-  const imageReadyRef = useRef<(() => void) | null>(null);
   const inFlightRef = useRef(false);
   const queuedRef = useRef<string | null>(null);
+  // A session-scoped nonce. Mixed into every seed-image hash so that two
+  // identical prompts in the same session produce two different images,
+  // and the same prompt in two different sessions likewise differs. This
+  // is what kills the "template" feel: the same words never paint the
+  // same world twice.
+  const sessionNonceRef = useRef<number>(Math.floor(Math.random() * 0xffffffff));
 
   useLingbotState((msg) => setSnapshot(msg));
+
+  // Per-step awaitable handles. We resolve each one when the matching
+  // SDK event fires, instead of guessing timing with timeouts.
+  const imageReadyRef = useRef<(() => void) | null>(null);
+  const resetReadyRef = useRef<(() => void) | null>(null);
+  const conditionsReadyRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (status !== "ready") {
@@ -62,6 +74,24 @@ export function VoiceDream() {
     }
   });
 
+  useLingbotGenerationReset(() => {
+    if (resetReadyRef.current) {
+      resetReadyRef.current();
+      resetReadyRef.current = null;
+    }
+  });
+
+  // We don't have a dedicated "conditions_ready" event hook in this
+  // SDK version, so we infer it from the next "state" message where
+  // both has_image and has_prompt are true.
+  useEffect(() => {
+    if (!snapshot) return;
+    if (snapshot.has_image && snapshot.has_prompt && conditionsReadyRef.current) {
+      conditionsReadyRef.current();
+      conditionsReadyRef.current = null;
+    }
+  }, [snapshot?.has_image, snapshot?.has_prompt]);
+
   const ready = status === "ready";
   const generating = snapshot?.started === true;
 
@@ -73,7 +103,7 @@ export function VoiceDream() {
    * The core "voice → world" pipeline. Called on every recognized phrase
    * (and on text input). Uses an in-flight guard + queued tail so a fast
    * speaker who finishes two phrases in 200ms still gets BOTH sent
-   * (the second waits for the first to drain).
+   * (the second waits for the first to drain, with the latest text).
    */
   const paintDream = useCallback(
     async (transcript: string) => {
@@ -89,37 +119,53 @@ export function VoiceDream() {
       setError(null);
       setLastPrompt(text);
       setPulse((p) => p + 1);
+      setPhase("loading");
 
       try {
-        if (!generating) {
-          setPhase("loading");
-          // Fresh procedural seed image. The image is keyed off the
-          // prompt hash so the SAME prompt on a different session gives
-          // a different image, and a DIFFERENT prompt on the same session
-          // gives an image keyed to that prompt.
-          const prompt = composeScenePrompt({ text, isFirst: true });
-          const seed = hashSeed(text);
-          const blob = await generateSeedImage({ seed });
-          const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
-          const imageReady = new Promise<void>((resolve) => {
-            imageReadyRef.current = resolve;
+        // 1. Always reset first. Lingbot's contract says image/prompt
+        //    can only be set on a clean (non-running) session. Reset
+        //    cancels the running generation and clears has_image /
+        //    has_prompt / started.
+        if (generating || snapshot?.has_image) {
+          const resetDone = new Promise<void>((resolve) => {
+            resetReadyRef.current = resolve;
           });
-          await setImage({ image: ref });
-          await imageReady;
-          await setPrompt({ prompt });
-          await start();
-          setPhase("live");
-        } else {
-          // Hot-swap. No new image — the model is already anchored, and
-          // changing the image mid-generation would require reset+start
-          // (Lingbot API contract). Instead, we hand the model a mutation
-          // prompt that preserves the camera grammar but updates the world.
-          const prev = (document.querySelector(
-            "[data-last-prompt]"
-          ) as HTMLElement | null)?.dataset.lastPrompt ?? null;
-          const prompt = composeMutationPrompt(prev, text);
-          await setPrompt({ prompt });
+          await reset();
+          await resetDone;
         }
+
+        // 2. Fresh procedural seed image. The hash mixes the prompt
+        //    text with the session nonce, so:
+        //    - same prompt, same session, called twice → two different images
+        //    - same prompt, two different sessions → two different images
+        //    - different prompts, same session → two different images
+        const seed = hashSeed(text + ":" + sessionNonceRef.current.toString(16));
+        const blob = await generateSeedImage({ seed });
+        const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
+
+        // 3. setImage, then wait for image_accepted.
+        const imageReady = new Promise<void>((resolve) => {
+          imageReadyRef.current = resolve;
+        });
+        await setImage({ image: ref });
+        await imageReady;
+
+        // 4. Compose the prompt from the user's words + a stable camera
+        //    grammar (the model needs the camera scaffolding or the
+        //    tilt-to-walk interaction gets confused).
+        const prompt = composeScenePrompt({ text, isFirst: !snapshot?.has_prompt });
+
+        // 5. setPrompt, then wait for conditions_ready (has_image &&
+        //    has_prompt both true in the next state message).
+        const conditionsReady = new Promise<void>((resolve) => {
+          conditionsReadyRef.current = resolve;
+        });
+        await setPrompt({ prompt });
+        await conditionsReady;
+
+        // 6. Start the generation. New scene, fresh world.
+        await start();
+        setPhase("live");
       } catch (e: any) {
         setError(e?.message ?? String(e));
         if (!generating) setPhase("idle");
@@ -131,12 +177,12 @@ export function VoiceDream() {
         queuedRef.current = null;
         if (next) {
           // Use a microtask break so React has a chance to render the
-          // "live" pill between sends.
+          // "loading" pill between sends.
           setTimeout(() => void paintDream(next), 0);
         }
       }
     },
-    [ready, generating, uploadFile, setImage, setPrompt, start]
+    [ready, generating, snapshot?.has_image, snapshot?.has_prompt, uploadFile, setImage, setPrompt, start, reset]
   );
 
   // Auto-send on every committed phrase from the speech engine. The

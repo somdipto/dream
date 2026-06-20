@@ -62,17 +62,6 @@ function cleanSubject(text: string): string {
   return lowered || "an atmospheric environment";
 }
 
-/**
- * Compose a prompt suitable for the "hot-swap" branch — i.e. the user spoke
- * while the world is already live. We DON'T rephrase their words; we keep
- * the previous subject's base, and append the new instruction as a
- * scene-level event. This keeps the camera framing stable across mutations.
- */
-export function composeMutationPrompt(prevPrompt: string | null, addition: string): string {
-  const trimmed = addition.trim().replace(/[.!]+$/, "");
-  if (!trimmed) return prevPrompt ?? "";
-  // Strip trailing camera/motion blocks from the previous prompt so we don't
-  // re-append them — the new prompt will get them again via composeScenePrompt.
-  const base = (prevPrompt ?? "").split(CAMERA_GRAMMAR)[0].trim();
-  return [base, `${trimmed}, visible across the scene now.`].filter(Boolean).join(" ");
-}
+// M3: composeMutationPrompt removed. Every prompt now goes through a
+// full reset → setImage → setPrompt → start cycle, so there is no
+// "hot-swap" branch anymore. See VoiceDream.tsx for the new pipeline.
