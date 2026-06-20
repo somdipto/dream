@@ -204,6 +204,28 @@ function fingerprintKey(k: string): string {
   return "***" + k.slice(-4);
 }
 
+const USER_KEY_SHAPE = /^rk_[A-Za-z0-9]{30,120}$/;
+
+/** Extract the per-request user key from the `X-Reactor-User-Key`
+ *  header. Returns:
+ *    - { present: false }                          if no header
+ *    - { present: true, key: "rk_..." }            if header is valid
+ *    - { present: true, malformed: true }          if header is
+ *      present but doesn't match the expected shape
+ *  Caller can then decide whether to 400 on malformed vs proceed.
+ */
+function extractUserKey(req: Request):
+  | { present: false }
+  | { present: true; key: string }
+  | { present: true; malformed: true } {
+  const h = req.headers.get("X-Reactor-User-Key");
+  if (h === null) return { present: false };
+  const trimmed = h.trim();
+  if (!trimmed) return { present: true, malformed: true };
+  if (!USER_KEY_SHAPE.test(trimmed)) return { present: true, malformed: true };
+  return { present: true, key: trimmed };
+}
+
 const keyPool = new KeyPool();
 
 // ---------------------------------------------------------------------------
@@ -318,11 +340,80 @@ export async function GET(req: Request) {
   }
 
   const { count } = keyPool.load(process.env);
-  if (count === 0) {
+  // M9.12: BYOK — accept a per-request user-supplied key in the
+  // `X-Reactor-User-Key` header. Shape-validated. The user key
+  // is tried FIRST (in front of the env pool) and the env pool
+  // acts as a fallback if the user key 402s. This means a user
+  // who pastes their own key never has to wait for the server's
+  // keys to be exhausted before their key gets a turn.
+  //
+  // Auth-failure (401/403) on the user key is fatal — we don't
+  // fall through to the env pool. The user pasted a malformed
+  // key and silently using the server's key instead would
+  // mask their typo. We surface the 401 so they can correct it.
+  const userKeyInfo = extractUserKey(req);
+
+  if (count === 0 && !userKeyInfo.present) {
     return NextResponse.json(
-      { error: "REACTOR_API_KEYS (or REACTOR_API_KEY) is not set on the server" },
+      {
+        error:
+          "No Reactor API key is available. Set REACTOR_API_KEYS on the server, or paste your own key in the app.",
+      },
       { status: 500, headers: { "Cache-Control": "no-store" } },
     );
+  }
+  if (userKeyInfo.present && "malformed" in userKeyInfo) {
+    return NextResponse.json(
+      {
+        error:
+          "Pasted Reactor key is malformed. It should look like rk_<40+ characters>.",
+      },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  // Try the user key first if present.
+  if (userKeyInfo.present && "key" in userKeyInfo) {
+    const userKey = userKeyInfo.key;
+    const r = await mintTokenWithKey(userKey);
+    if (r.ok) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const remaining = r.expires_at - nowSeconds - CACHE_SKEW_SECONDS;
+      const maxAge = Math.max(0, Math.min(TOKEN_LIFETIME_SECONDS, remaining));
+      return NextResponse.json(
+        { jwt: r.jwt, expires_at: r.expires_at },
+        {
+          headers: {
+            "Cache-Control": `private, max-age=${maxAge}`,
+            Vary: "Cookie, Authorization",
+          },
+        },
+      );
+    }
+    // 401/403: the user pasted a bad key. Don't fall through to
+    // the env pool — surface the error so they can correct it.
+    if (r.upstreamStatus === 401 || r.upstreamStatus === 403) {
+      return NextResponse.json(
+        { error: r.error },
+        { status: 401, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    // 402: user key is exhausted. Fall through to the env pool
+    // (the user's key gets a chance next request when they paste
+    // a fresh one — the server doesn't persist user keys).
+    // 5xx / network: fall through. Maybe Reactor is having a
+    // bad day; the env pool might still work.
+    // 429: per-IP — the env pool would also be 429. Surface 429.
+    if (r.upstreamStatus === 429) {
+      return NextResponse.json(
+        { error: r.error },
+        {
+          status: 429,
+          headers: { "Retry-After": "10", "Cache-Control": "no-store" },
+        },
+      );
+    }
+    // Otherwise: continue to the env pool.
   }
 
   // Walk healthy keys in order. Stop at the first success.
