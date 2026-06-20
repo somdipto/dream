@@ -353,21 +353,26 @@ function DesktopDefaultScene({
         const seed = Math.floor(Math.random() * 0xffffffff);
         const blob = await generateSeedImage({ seed });
         // Race the seed-image upload against 3s. If Reactor's upload
-        // slot is stuck (very common in practice — the demo queue
-        // backs up), fall through to a prompt-only paint so the user
-        // still sees a world. The seed image is an anchor, not a
-        // hard requirement.
+        // slot is stuck, we can't safely fall through to a
+        // prompt-only paint — Reactor rejects start() with "No
+        // image set. Call set_image first." when no anchor image
+        // has been acknowledged. So we must either succeed with an
+        // image or abort the auto-paint entirely.
         const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
         const uploadTimeout = new Promise<null>((resolve) =>
           setTimeout(() => resolve(null), 3000),
         );
         const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
-        if (ref) {
-          await setImage({ image: ref });
-        } else {
+        if (!ref) {
           // eslint-disable-next-line no-console
-          console.warn("[dream] default scene seed upload timed out — painting without anchor");
+          console.warn("[dream] default scene seed upload timed out — aborting auto-paint, waiting for user input");
+          return;
         }
+        await setImage({ image: ref });
+        // Wait for image_accepted up to 6s. If it never arrives,
+        // skip the start to avoid Reactor's "No image set" error.
+        // Wait for the imageReady callback the store wires up.
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
         await setPrompt({ prompt: composeScenePrompt({ text: prompt, isFirst: true }) });
         await start();
         // Save the default as the first scene of the active session.

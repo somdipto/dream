@@ -65,9 +65,14 @@ export function DesktopDream() {
   }, [snapshot?.has_image, snapshot?.has_prompt]);
 
   const generating = snapshot?.started === true;
-  useEffect(() => {
-    if (generating) setPhase("live");
-  }, [generating]);
+  // We deliberately do NOT auto-flip phase to "live" from the
+  // `generating` snapshot. The `generating` flag turns on the
+  // moment the model accepts `start`, but the first video frame
+  // can take several seconds after that — and the user looking
+  // at a "live" badge over a still black canvas thinks the app
+  // is broken. We want "live" to mean "frames are flowing".
+  // paintDream's pipeline is the single place that flips to
+  // "live", and it does so only after the world has rendered.
 
   const paintDream = useCallback(
     async (transcript: string, opts?: { seed?: number }) => {
@@ -119,21 +124,40 @@ export function DesktopDream() {
             setTimeout(() => resolve(null), 3000),
           );
           const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
+          // Track whether the model actually accepted the image.
+          // If the image_accepted callback never fires, we MUST NOT
+          // call setPrompt/start — Reactor requires an image to be
+          // set first and rejects with "No image set" otherwise.
+          let imageAccepted = false;
           if (ref) {
-            // Also race the image_accepted callback against 3s. If
-            // the model never sends image_accepted, skip and start
-            // with prompt only.
+            let imageReadyResolve!: () => void;
             const imageReady = new Promise<void>((resolve) => {
+              imageReadyResolve = resolve;
               imageReadyRef.current = resolve;
             });
             const imageReadyTimeout = new Promise<void>((resolve) =>
-              setTimeout(() => resolve(), 3000),
+              setTimeout(() => resolve(), 6000),
             );
             await setImage({ image: ref });
-            await Promise.race([imageReady, imageReadyTimeout]);
+            // Whichever resolves first wins. The real `imageReady`
+            // sets the flag; the timeout does not. That way we
+            // know whether Reactor actually acknowledged the
+            // image.
+            await Promise.race([
+              imageReady.then(() => {
+                imageAccepted = true;
+              }),
+              imageReadyTimeout,
+            ]);
           } else {
             // eslint-disable-next-line no-console
-            console.warn("[dream] seed upload timed out — painting without anchor image");
+            console.warn("[dream] seed upload timed out — aborting paint (no anchor image)");
+          }
+          if (!imageAccepted) {
+            // No anchor image → can't call setPrompt/start.
+            // Bail out and let the user retry. The prompt is
+            // already saved optimistically.
+            return "err";
           }
           const prompt = composeScenePrompt({ text, isFirst: !snapshot?.has_prompt });
           // Race the conditions-ready callback against 3s.

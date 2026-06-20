@@ -156,21 +156,33 @@ export function VoiceDream() {
         );
         const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
 
-        // 3. setImage, then wait for image_accepted. Race the wait
-        //    against 3s; if image_accepted never fires, fall through
-        //    so the model still gets the prompt + start.
+        // 3. setImage, then wait for image_accepted. Track whether
+        //    the model actually acknowledged the image; if not, we
+        //    cannot safely call setPrompt/start (Reactor rejects
+        //    with "No image set. Call set_image first.").
+        let imageAccepted = false;
         if (ref) {
+          let imageReadyResolve!: () => void;
           const imageReady = new Promise<void>((resolve) => {
+            imageReadyResolve = resolve;
             imageReadyRef.current = resolve;
           });
           const imageReadyTimeout = new Promise<void>((resolve) =>
-            setTimeout(() => resolve(), 3000),
+            setTimeout(() => resolve(), 6000),
           );
           await setImage({ image: ref });
-          await Promise.race([imageReady, imageReadyTimeout]);
+          await Promise.race([
+            imageReady.then(() => {
+              imageAccepted = true;
+            }),
+            imageReadyTimeout,
+          ]);
         } else {
           // eslint-disable-next-line no-console
-          console.warn("[dream] seed upload timed out — painting without anchor image");
+          console.warn("[dream] seed upload timed out — aborting paint");
+        }
+        if (!imageAccepted) {
+          return;
         }
 
         // 4. Compose the prompt from the user's words + a stable camera
