@@ -21,9 +21,16 @@ import { composeScenePrompt } from "./lib/scene-composer";
 import { dailyDream, dailyDreamTitle } from "./lib/curated-scenes";
 import { dreamBus } from "./lib/event-bus";
 import { classifyReactorError } from "./lib/reactor-errors";
+import { bustNextToken, consumeBust } from "./lib/token-bust";
 
 async function fetchToken(): Promise<string> {
-  const r = await fetch("/api/reactor/token");
+  // M9.8: respect the one-shot bust flag so the Lingbot SDK doesn't
+  // reuse a 6-hour JWT cached for an exhausted key. The flag is set
+  // by the 402-recovery flow in ReactorErrorScreen before connect()
+  // is called again.
+  const bust = consumeBust();
+  const url = bust ? "/api/reactor/token?nocache=1" : "/api/reactor/token";
+  const r = await fetch(url, bust ? { cache: "no-store" } : undefined);
   if (!r.ok) {
     const body = (await r.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `Token fetch failed: ${r.status}`);
@@ -682,7 +689,24 @@ function ReactorErrorScreen({
   const ctaIsExternal = !!classified.ctaHref;
   const ctaOnClick = classified.ctaHref
     ? () => window.open(classified.ctaHref!, "_blank", "noopener,noreferrer")
-    : onRetry;
+    : () => {
+        // M9.8: a non-credits-depleted retry may be reusing a stale
+        // cached JWT, especially if the key was just rotated. Bust
+        // the cache so the next token mint hits Reactor fresh.
+        bustNextToken();
+        onRetry();
+      };
+
+  // For credits_depleted, offer a secondary "try a different key"
+  // path that doesn't require the user to wait for the dashboard
+  // round-trip. The server's key pool (M9.7) handles the rotation
+  // transparently — we just need to bust the cached JWT.
+  const showFallbackKeyRetry =
+    classified.reason === "credits_depleted";
+  const onFallbackKey = () => {
+    bustNextToken();
+    onRetry();
+  };
   return (
     <div
       role="alert"
@@ -711,6 +735,16 @@ function ReactorErrorScreen({
           {ctaIsExternal && (
             <span aria-hidden="true" className="text-xs">↗</span>
           )}
+        </button>
+      )}
+      {showFallbackKeyRetry && (
+        <button
+          type="button"
+          onClick={onFallbackKey}
+          className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-5 py-2 text-xs font-medium text-white/85 hover:bg-white/10"
+          data-testid="reactor-error-try-fallback"
+        >
+          Try a different key
         </button>
       )}
       <button
