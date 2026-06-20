@@ -60,6 +60,17 @@ export function DesktopDream() {
   const imageReadyRef = useRef<(() => void) | null>(null);
   const resetReadyRef = useRef<(() => void) | null>(null);
   const conditionsReadyRef = useRef<(() => void) | null>(null);
+  // Set to true when the user picks a different session from the
+  // sidebar (or the curated gallery). Each Promise.race winner in
+  // `paintDream` checks this flag and short-circuits if it's true,
+  // so an in-flight paint doesn't commit its scene to the wrong
+  // journal after the active session has already changed.
+  const abortedRef = useRef(false);
+  // ID of the deferred re-paint `setTimeout` so we can cancel it on
+  // unmount (prevents a torn-down provider from receiving paint
+  // commands) and on a new paint starting before the previous one
+  // has been scheduled.
+  const repaintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Mirror of `snapshot` for use inside async closures. Without this,
   // paintDream reads a stale snapshot at pipeline start and the
   // post-timeout `setPhase("idle")` branch can fire even when the
@@ -244,10 +255,27 @@ export function DesktopDream() {
       inFlightRef.current = false;
       // Consume the pose lock — only affects the next paint.
       if (poseLocked) setPoseLocked(false);
+      // If the active session changed mid-paint (sidebar pick), the
+      // scene we just painted would be saved to the wrong journal.
+      // The `abortedRef` flag is set by the `dream:abortPaint` event
+      // handler. Skip the success commit in that case — the next
+      // paint (triggered by the loadScene event) is the one we want
+      // in the journal.
+      if (abortedRef.current) {
+        // Don't drain the queue — the caller is about to fire a new
+        // loadScene that supersedes everything we were doing.
+        return;
+      }
       const next = queuedRef.current;
       queuedRef.current = null;
       if (next) {
-        setTimeout(() => void paintDream(next), 0);
+        // Track this re-paint so we can cancel it on unmount and on
+        // a sidebar-driven abort.
+        if (repaintTimerRef.current !== null) clearTimeout(repaintTimerRef.current);
+        repaintTimerRef.current = setTimeout(() => {
+          repaintTimerRef.current = null;
+          void paintDream(next);
+        }, 0);
       }
     },
     // paintDream no longer depends on `snapshot` — it reads the live
@@ -266,11 +294,32 @@ export function DesktopDream() {
   useEffect(() => {
     return dreamBus.on("dream:loadScene", (detail) => {
       if (!detail?.prompt) return;
+      // The abort event was already emitted by the sidebar before
+      // this event arrived. Clear the flag so the *new* paint is
+      // allowed to commit its scene.
+      abortedRef.current = false;
       setText(detail.prompt);
       sessions.addScene({ prompt: detail.prompt, seed: detail.seed });
       void paintDreamRef.current(detail.prompt, { seed: detail.seed });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cooperative-abort: any caller about to switch the active session
+  // (sidebar pick, curated gallery tap) fires this first so the
+  // in-flight `paintDream` short-circuits before it would call
+  // `addScene` on the wrong session.
+  useEffect(() => {
+    return dreamBus.on("dream:abortPaint", () => {
+      abortedRef.current = true;
+      // Cancel any pending deferred re-paint as well — there's a new
+      // paint on the way and the queued one would land in the
+      // wrong journal.
+      if (repaintTimerRef.current !== null) {
+        clearTimeout(repaintTimerRef.current);
+        repaintTimerRef.current = null;
+      }
+    });
   }, []);
 
   // On mount, if the URL contains a shared dream (`?d=...`), auto-paint
@@ -285,6 +334,17 @@ export function DesktopDream() {
     }, 250);
     clearDreamFromUrl();
     return () => clearTimeout(t);
+  }, []);
+
+  // On unmount, cancel any deferred re-paint so a torn-down SDK
+  // provider doesn't receive paint commands from a queued tail.
+  useEffect(() => {
+    return () => {
+      if (repaintTimerRef.current !== null) {
+        clearTimeout(repaintTimerRef.current);
+        repaintTimerRef.current = null;
+      }
+    };
   }, []);
 
   // Desktop voice: push-to-talk via spacebar OR the mic button. Same

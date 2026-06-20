@@ -47,6 +47,17 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
   // Mobile swipe-down-to-close. Tracks a drag in progress.
   const dragRef = useRef<{ y: number; t: number; dy: number } | null>(null);
   const asideRef = useRef<HTMLElement | null>(null);
+  // Element inside the sidebar that should receive focus when the
+  // sidebar opens. We focus the first tab button so a screen-reader
+  // user lands on a known landmark; Escape and clicking the close
+  // button return focus to whatever element was focused before
+  // (the topbar ☰ button — located by data-testid).
+  const firstFocusableRef = useRef<HTMLButtonElement | null>(null);
+  // Remember the element focused at the moment we opened, so we
+  // can restore focus to it on close. (For most flows this is the
+  // ☰ button in the top bar; we capture whatever it was at the
+  // moment the sidebar opened.)
+  const previouslyFocusedRef = useRef<Element | null>(null);
 
   const isDesktop = platform.isDesktop;
   const sorted = [...store.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -57,6 +68,37 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
       if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     };
   }, []);
+
+  // Focus management: when the sidebar opens, move focus to the
+  // first tab so a keyboard / screen-reader user lands on a known
+  // landmark. When it closes, return focus to the element that was
+  // focused before (usually the ☰ button in the top bar) so the
+  // user doesn't lose their place in the document.
+  //
+  // We defer the focus on open by a frame because the sidebar is
+  // animated in via Tailwind's `transition-transform` and focusing
+  // a translate-y-full element too early can scroll the page.
+  useEffect(() => {
+    if (open) {
+      previouslyFocusedRef.current =
+        typeof document !== "undefined" ? document.activeElement : null;
+      const t = setTimeout(() => {
+        firstFocusableRef.current?.focus();
+      }, 50);
+      return () => clearTimeout(t);
+    } else if (previouslyFocusedRef.current instanceof HTMLElement) {
+      // Sidebar just closed — restore focus to the trigger.
+      const el = previouslyFocusedRef.current;
+      // Only restore if the element is still in the document and
+      // not detached. (Rapid open/close cycles can detach nodes.)
+      if (document.body.contains(el)) {
+        // Use a microtask to give the close animation a chance to
+        // start so focus restoration isn't visible as a "jump".
+        queueMicrotask(() => el.focus());
+      }
+    }
+    return undefined;
+  }, [open]);
 
   // Mobile-only swipe-down-to-close. Threshold: drag > 100px OR
   // velocity > 0.5 px/ms. We track only the first finger; secondary
@@ -171,6 +213,7 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
               aria-pressed={tab === "sessions"}
               onClick={() => setTab("sessions")}
               data-testid="tab-sessions"
+              ref={firstFocusableRef}
               className={[
                 "rounded-full px-3 py-1 text-xs font-medium transition",
                 tab === "sessions"

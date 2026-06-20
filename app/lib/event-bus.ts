@@ -28,6 +28,12 @@ export interface DreamBusEvents {
   "dream:pruned": { kept: number; removed: number };
   /** Fired when a user-visible toast should appear. */
   "dream:toast": { id?: string; kind: "info" | "error" | "success"; message: string; ttlMs?: number };
+  /** Fired before `dream:loadScene` so any in-flight paint can
+   *  short-circuit and not commit `addScene` to the wrong session.
+   *  Listeners (VoiceDream, DesktopDream) set an `abortedRef` flag
+   *  that each Promise.race winner checks before calling
+   *  `sessions.addScene`. Cheap, no SDK change required. */
+  "dream:abortPaint": Record<string, never>;
 }
 
 type EventName = keyof DreamBusEvents;

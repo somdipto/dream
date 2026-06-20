@@ -271,106 +271,16 @@ function DreamSurface() {
     );
   }
 
-  // Connecting: brief overlay between Begin and Connected. We track
-  // a "has begun connecting" flag so the initial 100ms post-Begin
-  // render doesn't flash a "disconnected" overlay.
-//
-// Bug fix: this used to be a hard `bg-black` page. That read as
-// "broken app" the moment a real user hit Begin, because the SDK
-// takes 5-15 seconds to actually connect. We now mirror the
-// Video.tsx aurora background so the user sees a beautiful animated
-// gradient while waiting, not a black void.
-  if (status === "disconnected" || status === "connecting" || status === "waiting") {
-    return (
-      <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0612] p-6 text-white">
-        {/* Aurora background — same gradient as Video.tsx so the
-            transition from connecting → playing is seamless, with
-            no hard black cut. */}
-        <div
-          className="pointer-events-none absolute inset-0 animate-[aurora-shift_18s_ease-in-out_infinite] bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.55),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(236,72,153,0.45),transparent_55%),radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.40),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(168,85,247,0.40),transparent_55%)] bg-[length:200%_200%]"
-          aria-hidden="true"
-          data-testid="connect-aurora"
-        />
-        <div className="relative max-w-sm text-center">
-          <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-amber-400" />
-          <p className="mt-4 text-sm text-white/85">
-            {status === "disconnected"
-              ? lastError
-                ? `Couldn't connect: ${lastError.message}`
-                : "Reconnecting…"
-              : status === "connecting"
-                ? "Connecting to Reactor…"
-                : "Waiting for a GPU…"}
-          </p>
-          <p className="mt-1 text-xs text-white/55">
-            This usually takes 5–15 seconds.
-          </p>
-          {lastError && (
-            <button
-              onClick={() => void connect()}
-              className="mt-6 rounded-full bg-white/15 px-5 py-2 text-sm font-medium text-white hover:bg-white/25"
-            >
-              Try again
-            </button>
-          )}
-          <button
-            onClick={handleReset}
-            className="mt-3 block w-full text-[10px] uppercase tracking-wider text-white/45 hover:text-white/70"
-          >
-            Back
-          </button>
-        </div>
-      </main>
-    );
-  }
-
-  return (
-    <main className="relative min-h-screen bg-black text-white">
-      <CursorEmbed />
-      {/* Video fills the screen as background. */}
-      <div className="fixed inset-0 z-0">
-        <Video />
-      </div>
-
-      {/* Virtual joystick fallback — rendered ABOVE the video and
-          BELOW the top/bottom bars. Only shown on mobile when motion
-          permission was denied (or is unsupported). The user can
-          drag the screen to look and drag down to walk forward. */}
-      {platform.isMobile &&
-        !vrMode &&
-        (motion.permission === "denied" || motion.permission === "unsupported") && (
-          <VirtualJoystick enabled={status === "ready"} />
-        )}
-
-      {/* Sidebar — sits above the canvas. Toggle button is always visible. */}
-      <SessionSidebar
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        onSelectScene={(sessionId, sceneId) => {
-          // Painting a specific past scene = re-running its prompt.
-          const s = sessions.sessions.find((x) => x.id === sessionId);
-          const sc = s?.scenes.find((x) => x.id === sceneId);
-          if (sc) {
-            sessions.setActive(sessionId);
-            // The Dream component re-runs the last scene on active-session
-            // change. We forward the prompt via a typed event bus that
-            // only our own modules can emit on — no global window event
-            // for browser extensions to hijack.
-            dreamBus.emit("dream:loadScene", { prompt: sc.prompt, seed: sc.seed });
-          }
-          setSidebarOpen(false);
-        }}
-        onPickCurated={(s) => {
-          // Curated gallery: also dispatch the same load event so the
-          // current Dream component re-paints with the curated seed.
-          dreamBus.emit("dream:loadScene", { prompt: s.prompt, seed: s.seed });
-        }}
-      />
-
-      {/* Top bar — connection state + session toggle + new + reset.
-          Hidden in VR mode (the immersive view takes over). */}
-      {!vrMode && (
-        <div className="pointer-events-none fixed inset-x-0 top-0 z-20 flex items-start justify-between gap-3 p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+  // Top bar + sidebar are hoisted here so they remain reachable on
+  // every post-Begin state — including the connecting-error overlay.
+  // Before this fix, when Reactor returned 402 (credits_depleted) the
+  // early-return for status==="disconnected" hid the entire topbar,
+  // so the user had no way to open the journal, start a new session,
+  // or load a previously-painted scene while offline. The sidebar
+  // works offline because sessions live in localStorage.
+  const topbar = !vrMode ? (
+    <>
+      <div className="pointer-events-none fixed inset-x-0 top-0 z-20 flex items-start justify-between gap-3 p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <div className="pointer-events-auto flex flex-col items-start gap-2">
           <div className="flex items-center gap-2">
             <button
@@ -438,7 +348,116 @@ function DreamSurface() {
           )}
         </div>
       </div>
-      )}
+    </>
+  ) : null;
+
+  const sidebar = (
+    <SessionSidebar
+      open={sidebarOpen}
+      onClose={() => setSidebarOpen(false)}
+      onSelectScene={(sessionId, sceneId) => {
+        // Painting a specific past scene = re-running its prompt.
+        const s = sessions.sessions.find((x) => x.id === sessionId);
+        const sc = s?.scenes.find((x) => x.id === sceneId);
+        if (sc) {
+          // First, ask any in-flight paint to short-circuit so the
+          // in-progress scene doesn't end up in the wrong journal
+          // entry after `setActive` flips the active session.
+          dreamBus.emit("dream:abortPaint", {});
+          sessions.setActive(sessionId);
+          // The Dream component re-runs the last scene on active-session
+          // change. We forward the prompt via a typed event bus that
+          // only our own modules can emit on — no global window event
+          // for browser extensions to hijack.
+          dreamBus.emit("dream:loadScene", { prompt: sc.prompt, seed: sc.seed });
+        }
+        setSidebarOpen(false);
+      }}
+      onPickCurated={(s) => {
+        // Curated gallery: also dispatch the same load event so the
+        // current Dream component re-paints with the curated seed.
+        dreamBus.emit("dream:abortPaint", {});
+        dreamBus.emit("dream:loadScene", { prompt: s.prompt, seed: s.seed });
+      }}
+    />
+  );
+
+  // Connecting: brief overlay between Begin and Connected. We track
+  // a "has begun connecting" flag so the initial 100ms post-Begin
+  // render doesn't flash a "disconnected" overlay.
+//
+// Bug fix: this used to be a hard `bg-black` page. That read as
+// "broken app" the moment a real user hit Begin, because the SDK
+// takes 5-15 seconds to actually connect. We now mirror the
+// Video.tsx aurora background so the user sees a beautiful animated
+// gradient while waiting, not a black void.
+  if (status === "disconnected" || status === "connecting" || status === "waiting") {
+    return (
+      <>
+        {topbar}
+        {sidebar}
+        <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0612] p-6 text-white">
+          {/* Aurora background — same gradient as Video.tsx so the
+              transition from connecting → playing is seamless, with
+              no hard black cut. */}
+          <div
+            className="pointer-events-none absolute inset-0 animate-[aurora-shift_18s_ease-in-out_infinite] bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.55),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(236,72,153,0.45),transparent_55%),radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.40),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(168,85,247,0.40),transparent_55%)] bg-[length:200%_200%]"
+            aria-hidden="true"
+            data-testid="connect-aurora"
+          />
+          <div className="relative max-w-sm text-center">
+            <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+            <p className="mt-4 text-sm text-white/85">
+              {status === "disconnected"
+                ? lastError
+                  ? `Couldn't connect: ${lastError.message}`
+                  : "Reconnecting…"
+                : status === "connecting"
+                  ? "Connecting to Reactor…"
+                  : "Waiting for a GPU…"}
+            </p>
+            <p className="mt-1 text-xs text-white/55">
+              This usually takes 5–15 seconds.
+            </p>
+            {lastError && (
+              <button
+                onClick={() => void connect()}
+                className="mt-6 rounded-full bg-white/15 px-5 py-2 text-sm font-medium text-white hover:bg-white/25"
+              >
+                Try again
+              </button>
+            )}
+            <button
+              onClick={handleReset}
+              className="mt-3 block w-full text-[10px] uppercase tracking-wider text-white/45 hover:text-white/70"
+            >
+              Back
+            </button>
+          </div>
+        </main>
+      </>
+    );
+  }
+
+  return (
+    <main className="relative min-h-screen bg-black text-white">
+      {topbar}
+      {sidebar}
+      <CursorEmbed />
+      {/* Video fills the screen as background. */}
+      <div className="fixed inset-0 z-0">
+        <Video />
+      </div>
+
+      {/* Virtual joystick fallback — rendered ABOVE the video and
+          BELOW the top/bottom bars. Only shown on mobile when motion
+          permission was denied (or is unsupported). The user can
+          drag the screen to look and drag down to walk forward. */}
+      {platform.isMobile &&
+        !vrMode &&
+        (motion.permission === "denied" || motion.permission === "unsupported") && (
+          <VirtualJoystick enabled={status === "ready"} />
+        )}
 
       {/* Bottom — voice UI on mobile, text + paint on desktop.
           Hidden in VR mode. */}
