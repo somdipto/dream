@@ -28,6 +28,9 @@ export interface Scene {
   seed: number;
   /** Date.now() at paint success. */
   timestamp: number;
+  /** QA3: user toggled this scene as a favorite. Optional for
+   *  forward-compat with v1 blobs that predate the field. */
+  favorite?: boolean;
 }
 
 export interface Session {

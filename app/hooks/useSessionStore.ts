@@ -27,6 +27,10 @@ export interface UseSessionStore {
   restoreSession: (session: Session) => void;
   renameSession: (sessionId: string, title: string) => void;
   setActive: (sessionId: string | null) => void;
+  /** QA3: toggle the favorite flag on a scene. */
+  toggleFavorite: (sceneId: string, sessionId?: string) => void;
+  /** QA3: recent prompts across all sessions, newest first. */
+  recentPrompts: () => { prompt: string; seed: number; timestamp: number }[];
   /** Bumped when a save attempt hits quota and prunes. */
   pruneNotice: number;
   /** True once the store has hydrated from localStorage. */
@@ -257,6 +261,46 @@ export function useSessionStoreImpl(): UseSessionStore {
     );
   }, []);
 
+  const toggleFavorite = useCallback(
+    (sceneId: string, sessionId?: string) => {
+      const targetId = sessionId ?? activeId;
+      if (!targetId) return;
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id !== targetId) return s;
+          return {
+            ...s,
+            scenes: s.scenes.map((sc) =>
+              sc.id === sceneId
+                ? { ...sc, favorite: !sc.favorite }
+                : sc,
+            ),
+            updatedAt: Date.now(),
+          };
+        }),
+      );
+    },
+    [activeId],
+  );
+
+  const recentPrompts = useCallback(
+    () => {
+      const out: { prompt: string; seed: number; timestamp: number }[] = [];
+      for (const s of sessionsRef.current) {
+        for (const sc of s.scenes) {
+          out.push({
+            prompt: sc.prompt,
+            seed: sc.seed,
+            timestamp: sc.timestamp,
+          });
+        }
+      }
+      out.sort((a, b) => b.timestamp - a.timestamp);
+      return out.slice(0, 10);
+    },
+    [],
+  );
+
   const setActive = useCallback((sessionId: string | null) => {
     // Validate that the requested id exists in our sessions list.
     // Without this, a stale id (e.g. from a URL or a deleted session
@@ -313,6 +357,8 @@ export function useSessionStoreImpl(): UseSessionStore {
     restoreSession,
     renameSession,
     setActive,
+    toggleFavorite,
+    recentPrompts,
     pruneNotice,
     hydrated,
     recoveryNotice,
