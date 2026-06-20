@@ -303,6 +303,11 @@ export function useVoice(): VoiceControls {
     try {
       rec.start();
       setListening(true);
+      // QA6: clear any prior error on a successful start.
+      // Without this, the user's "Tap to retry" banner
+      // stayed visible during the auto-restart loop, which
+      // made it look like the mic was still broken.
+      setError(null);
       // QA4: start the audio-level meter alongside the
       // recogniser. The meter is best-effort — it never
       // blocks the speech pipeline.

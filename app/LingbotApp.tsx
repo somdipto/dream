@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LingbotProvider, useLingbot } from "@reactor-models/lingbot";
 import { Video } from "./components/Video";
+import { DirectorOverlay } from "./components/DirectorOverlay";
 import { StatusBadge } from "./components/StatusBadge";
 import { CommandError } from "./components/CommandError";
 import { VoiceDream } from "./components/VoiceDream";
@@ -15,6 +16,8 @@ import { VirtualJoystick } from "./components/VirtualJoystick";
 import { SessionProvider, useSessions } from "./components/SessionProvider";
 import { useMotion } from "./hooks/useMotion";
 import { useVoice } from "./hooks/useVoice";
+import { useRemDrift } from "./hooks/useRemDrift";
+import { useAmbient } from "./hooks/useAmbient";
 import { usePlatform } from "./hooks/usePlatform";
 import { generateSeedImage } from "./lib/seed-image";
 import { composeScenePrompt } from "./lib/scene-composer";
@@ -812,10 +815,29 @@ function DreamSurface() {
     return () => window.removeEventListener("keydown", onKey);
   }, [hasBegun, shortcutsOpen]);
 
-  const handleBegin = useCallback(() => {
+  const handleBegin = useCallback(async () => {
     if (platform.isMobile) {
+      // QA6: AWAIT the iOS motion permission prompt.
+      // Previously `void motion.requestPermission()` ran
+      // fire-and-forget and `setHasBegun(true)` flipped
+      // immediately, dropping the user into the world
+      // before the native prompt resolved. On iOS this
+      // meant the prompt was sometimes never shown (the
+      // app's gesture was already consumed by the Begin
+      // tap) and the user got the world with no gyroscope
+      // and no way to re-prompt. Now we await the result
+      // and only then flip hasBegun. On Android (no
+      // requestPermission API), `motion.permission` is
+      // already "granted" or "unsupported" so the await
+      // resolves immediately.
       if (motion.permission === "default") {
-        void motion.requestPermission();
+        try {
+          await motion.requestPermission();
+        } catch {
+          // Permission dialog threw — fall through and
+          // let the user start the world anyway. They can
+          // re-enable motion later in browser settings.
+        }
       }
       if (voice.supported && !voice.listening) {
         try {
@@ -962,6 +984,42 @@ function DreamSurface() {
     setStuck(false);
     return;
   }, [status, hasBegun]);
+
+  // QA6/F1: REM Drift. When the world goes quiet for 12s and
+  // the user has spoken at least one prompt, auto-paint a
+  // mashed-up "REM cycle" prompt. This makes the demo legible
+  // to a passive observer — the world keeps mutating even when
+  // the user stops talking. Paused while the user is actively
+  // recording voice (voice.listening === true).
+  const remPaused =
+    !hasBegun ||
+    status !== "ready" ||
+    (platform.isMobile && voice.listening);
+  // QA6/F3: Sound World. Procedural WebAudio ambient that
+  // tracks the current scene's prompt. The hook is a
+  // no-op until the user taps the sound toggle (browser
+  // autoplay policy: AudioContext can only be created
+  // inside a user gesture).
+  const ambient = useAmbient({
+    enabled: hasBegun,
+    paused: vrMode,
+  });
+  useRemDrift({
+    paused: remPaused,
+    onDrift: (remPrompt) => {
+      // Route through the same loadScene path the rest of the
+      // app uses. The bus listener on VoiceDream/DesktopDream
+      // picks it up and calls paintDream.
+      dreamBus.emit("dream:loadScene", { prompt: remPrompt, seed: Math.floor(Math.random() * 0x7fffffff) });
+      // Brief toast so the user knows the dream drifted on
+      // its own (some users find this uncanny).
+      dreamBus.emit("dream:toast", {
+        kind: "info",
+        message: "Your dream drifted…",
+        ttlMs: 2500,
+      });
+    },
+  });
 
   const onTryDifferentKey = useCallback(() => {
     // M9.8 bust flag + reconnect. The cached 6-hour JWT (if any) is
@@ -1154,6 +1212,27 @@ function DreamSurface() {
               className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-black/40 text-xs text-white/80 backdrop-blur hover:bg-black/60"
             >
               ?
+            </button>
+            {/* QA6/F3: Sound World toggle. The ambient bed
+                stays off until the user opts in (browser
+                autoplay policy). When on, the audio layer
+                matches the current scene's prompt and
+                crossfades on scene change. */}
+            <button
+              type="button"
+              onClick={() => ambient.toggle()}
+              aria-label={ambient.isOn ? "Mute ambient sound" : "Play ambient sound"}
+              aria-pressed={ambient.isOn}
+              data-testid="ambient-toggle"
+              data-ambient-on={ambient.isOn ? "true" : "false"}
+              className={[
+                "grid h-10 w-10 place-items-center rounded-full border text-xs backdrop-blur transition-colors",
+                ambient.isOn
+                  ? "border-emerald-300/40 bg-emerald-400/20 text-emerald-100 hover:bg-emerald-400/30"
+                  : "border-white/10 bg-black/40 text-white/80 hover:bg-black/60",
+              ].join(" ")}
+            >
+              {ambient.isOn ? "🔊" : "🔇"}
             </button>
             <StatusBadge />
           </div>
@@ -1391,6 +1470,11 @@ function DreamSurface() {
       {/* Video fills the screen as background. */}
       <div className="fixed inset-0 z-0">
         <Video />
+        {/* QA6/F2: Director overlay — CSS cinema filter that
+            reacts to chip clicks. Sits inside the z-0
+            container so it composites with the video but
+            doesn't intercept pointer events. */}
+        <DirectorOverlay />
       </div>
 
       {/* Virtual joystick fallback — rendered ABOVE the video and

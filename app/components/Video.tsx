@@ -7,7 +7,7 @@ import {
   useLingbotState,
 } from "@reactor-models/lingbot";
 import { recordBlackScreen } from "../lib/black-screen-log";
-import { setLastImageUrl } from "./SessionSidebar";
+import { setLastImageUrl } from "../lib/last-image";
 
 // Full-bleed background video. `<LingbotMainVideoView>` is a pre-bound
 // `<ReactorView track="main_video">` from the typed SDK — no refs, no

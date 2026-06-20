@@ -556,7 +556,12 @@ export function DesktopDream() {
         <ChipStrip
           chips={STYLE_PRESETS.map((p) => ({ id: p.id, label: p.label, emoji: p.emoji }))}
           activeId={styleId}
-          onSelect={setStyleId}
+          onSelect={(id) => {
+            setStyleId(id);
+            // QA6/F2: mirror to the Director overlay so the
+            // CSS cinema filter kicks in immediately.
+            import("../lib/director-state").then((m) => m.setDirectorState({ styleId: id }));
+          }}
           size="sm"
           dimmedIds={variantId && variantId !== "none" ? conflictingPresets : null}
           dimmedReason="Conflicts with the selected time/weather"
@@ -564,7 +569,10 @@ export function DesktopDream() {
         <ChipStrip
           chips={TIME_VARIANTS.map((v) => ({ id: v.id, label: v.label, emoji: v.emoji }))}
           activeId={variantId}
-          onSelect={setVariantId}
+          onSelect={(id) => {
+            setVariantId(id);
+            import("../lib/director-state").then((m) => m.setDirectorState({ variantId: id }));
+          }}
           size="sm"
           dimmedIds={styleId ? conflictingVariants : null}
           dimmedReason="Conflicts with the selected style"

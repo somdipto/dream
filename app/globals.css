@@ -147,3 +147,12 @@ html.cursor-hidden textarea {
   35%  { opacity: 1; transform: scale(1.00); }
   100% { opacity: 0; transform: scale(1.00); }
 }
+
+/* QA6 / F2: Director badge fade-in. Pings the corner
+   label for 1.6s whenever the user picks a new style. */
+@keyframes director-badge {
+  0%   { opacity: 0; transform: translateY(-4px); }
+  15%  { opacity: 1; transform: translateY(0); }
+  70%  { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(0); }
+}

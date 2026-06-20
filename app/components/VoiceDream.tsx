@@ -590,7 +590,10 @@ export function VoiceDream() {
         <ChipStrip
           chips={STYLE_PRESETS.map((p) => ({ id: p.id, label: p.label, emoji: p.emoji }))}
           activeId={styleId}
-          onSelect={setStyleId}
+          onSelect={(id) => {
+            setStyleId(id);
+            import("../lib/director-state").then((m) => m.setDirectorState({ styleId: id }));
+          }}
           size="sm"
           dimmedIds={variantId && variantId !== "none" ? conflictingPresets : null}
           dimmedReason="Conflicts with the selected time/weather"
@@ -598,7 +601,10 @@ export function VoiceDream() {
         <ChipStrip
           chips={TIME_VARIANTS.map((v) => ({ id: v.id, label: v.label, emoji: v.emoji }))}
           activeId={variantId}
-          onSelect={setVariantId}
+          onSelect={(id) => {
+            setVariantId(id);
+            import("../lib/director-state").then((m) => m.setDirectorState({ variantId: id }));
+          }}
           size="sm"
           dimmedIds={styleId ? conflictingVariants : null}
           dimmedReason="Conflicts with the selected style"
@@ -654,7 +660,18 @@ export function VoiceDream() {
           <button
             type="button"
             onClick={onMicClick}
-            disabled={!voice.supported || !ready}
+            disabled={!voice.supported}
+            // QA6: allow tapping the mic to retry even
+            // while the SDK is reconnecting. Previously the
+            // `disabled={... || !ready}` cut off "Tap to
+            // retry" the moment a `ready` blip occurred —
+            // user had to wait for the SDK to finish
+            // reconnecting before they could try again,
+            // and voice.error stayed visible the entire
+            // time. The retry path itself is best-effort
+            // (start() returns early if `shouldListenRef`
+            // is false) so a tap during reconnect is safe.
+            data-testid="mobile-mic-btn"
             className={[
               "mx-auto grid h-16 w-16 place-items-center rounded-full border transition active:scale-95",
               muted
@@ -671,7 +688,6 @@ export function VoiceDream() {
                   ? "Mic on — click to mute"
                   : "Start listening"
             }
-            data-testid="mobile-mic-btn"
           >
             <MicIcon active={voice.listening} muted={muted} />
           </button>

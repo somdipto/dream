@@ -43,6 +43,10 @@ export interface DreamBusEvents {
    *  apart from "connection is broken" — failures show as
    *  a stale duration with the dot color flipping to amber. */
   "dream:paintDone": { ms: number; ok: boolean };
+  /** QA6/F2: emitted by the chip strips whenever the active
+   *  style or time/weather variant changes. The Director
+   *  overlay listens and applies the matching CSS filter. */
+  "dream:directorChange": { styleId: string | null; variantId: string | null };
 }
 
 type EventName = keyof DreamBusEvents;

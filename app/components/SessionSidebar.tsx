@@ -444,13 +444,10 @@ async function downloadScenePng(scene: { prompt: string; seed: number; id: strin
 // change; read by downloadScenePng. Lives outside React
 // so a download triggered from a stale closure still
 // gets the freshest frame.
-let lastImageUrl: string | null = null;
-export function setLastImageUrl(url: string | null) {
-  lastImageUrl = url;
-}
-function readLastImageUrl(): string | undefined {
-  return lastImageUrl ?? undefined;
-}
+import { readLastImageUrl, setLastImageUrl } from "../lib/last-image";
+// Re-exported for backwards compatibility with other call sites
+// that imported `setLastImageUrl` from this module.
+export { setLastImageUrl };
 
 // Generate a deterministic, in-browser placeholder for a
 // given seed. The seed-image.ts module owns the actual
