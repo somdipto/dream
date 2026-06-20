@@ -50,3 +50,25 @@ button:disabled {
   60% { transform: scale(2.4); opacity: 0.6; }
   100% { transform: scale(1); opacity: 1; }
 }
+
+/* Embedded-cursor mode: when the world is live and the user is
+ * navigating it (WASD/mouse), the system cursor disappears so the
+ * painted video shows edge-to-edge. The user can still see the cursor
+ * over interactive controls because those elements override the
+ * cursor to "pointer" / "text" via Tailwind's cursor-* utilities. */
+html.cursor-hidden,
+html.cursor-hidden body,
+html.cursor-hidden main {
+  cursor: none;
+}
+html.cursor-hidden a,
+html.cursor-hidden button,
+html.cursor-hidden input,
+html.cursor-hidden textarea,
+html.cursor-hidden [role="button"] {
+  cursor: pointer;
+}
+html.cursor-hidden input,
+html.cursor-hidden textarea {
+  cursor: text;
+}

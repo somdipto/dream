@@ -10,20 +10,23 @@ import {
 } from "@reactor-models/lingbot";
 import { generateSeedImage } from "../lib/seed-image";
 import { composeScenePrompt } from "../lib/scene-composer";
+import { useSessions } from "./SessionProvider";
 
 // Desktop equivalent of VoiceDream. Same paint pipeline (reset →
 // fresh seed image → setImage → setPrompt → start) but driven by a
-// text input instead of voice. No mic auto-arm. Lives in a separate
-// component so the Voice code path stays small and focused on speech.
+// text input instead of voice. On success, the painted scene is
+// appended to the active session via `useSessions().addScene`.
 //
-// Why the same per-prompt-reset flow? Consistency with the mobile
-// build — every prompt is a fresh blank canvas. Same prompt twice =
-// different image (session nonce).
+// The component also listens for a `dream:loadScene` window event
+// (fired from the SessionSidebar when the user clicks a past scene) and
+// re-runs the paint for that prompt.
 
 export function DesktopDream() {
   const { uploadFile, setImage, setPrompt, start, reset } = useLingbot();
+  const sessions = useSessions();
   const [snapshot, setSnapshot] = useState<LingbotStateMessage | null>(null);
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
+  const [lastSeed, setLastSeed] = useState<number | null>(null);
   const [text, setText] = useState("");
   const [phase, setPhase] = useState<"idle" | "loading" | "live">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +68,7 @@ export function DesktopDream() {
   }, [generating]);
 
   const paintDream = useCallback(
-    async (transcript: string) => {
+    async (transcript: string, opts?: { seed?: number }) => {
       const text = transcript.trim();
       if (!text) return;
       if (inFlightRef.current) {
@@ -77,6 +80,12 @@ export function DesktopDream() {
       setLastPrompt(text);
       setPhase("loading");
 
+      // If the caller provided a seed (e.g. from a stored scene), use
+      // it verbatim. Otherwise generate a fresh one so the same prompt
+      // twice produces two different worlds.
+      const seed = (opts?.seed ?? hashSeed(text + ":" + sessionNonceRef.current.toString(16))) >>> 0;
+      setLastSeed(seed);
+
       try {
         if (generating || snapshot?.has_image) {
           const resetDone = new Promise<void>((resolve) => {
@@ -85,7 +94,6 @@ export function DesktopDream() {
           await reset();
           await resetDone;
         }
-        const seed = hashSeed(text + ":" + sessionNonceRef.current.toString(16));
         const blob = await generateSeedImage({ seed });
         const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
         const imageReady = new Promise<void>((resolve) => {
@@ -101,6 +109,9 @@ export function DesktopDream() {
         await conditionsReady;
         await start();
         setPhase("live");
+        // Append to active session. `addScene` auto-creates a session
+        // if none is active — the user's "memory" requirement.
+        sessions.addScene({ prompt: text, seed });
       } catch (e: any) {
         setError(e?.message ?? String(e));
         if (!generating) setPhase("idle");
@@ -113,8 +124,53 @@ export function DesktopDream() {
         }
       }
     },
-    [generating, snapshot?.has_image, snapshot?.has_prompt, uploadFile, setImage, setPrompt, start, reset]
+    [
+      generating,
+      snapshot?.has_image,
+      snapshot?.has_prompt,
+      uploadFile,
+      setImage,
+      setPrompt,
+      start,
+      reset,
+      sessions,
+    ],
   );
+
+  // Listen for scene-load events from the sidebar.
+  useEffect(() => {
+    function onLoad(e: Event) {
+      const detail = (e as CustomEvent).detail as
+        | { prompt: string; seed: number }
+        | undefined;
+      if (!detail?.prompt) return;
+      setText(detail.prompt);
+      void paintDream(detail.prompt, { seed: detail.seed });
+    }
+    window.addEventListener("dream:loadScene", onLoad as EventListener);
+    return () => window.removeEventListener("dream:loadScene", onLoad as EventListener);
+  }, [paintDream]);
+
+  // On first ready + no active session, also re-paint the last scene
+  // of the active session if it has one. (The default-scene
+  // auto-paint handles the "first launch" case; this handles the
+  // "open app, your last session is still active" case.)
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (!sessions.hydrated) return;
+    if (restoredRef.current) return;
+    const last = sessions.activeSession?.scenes[sessions.activeSession.scenes.length - 1];
+    if (last && snapshot?.has_image === false) {
+      restoredRef.current = true;
+      // Defer to next tick so the SDK is fully wired up.
+      setTimeout(() => {
+        setText(last.prompt);
+        void paintDream(last.prompt, { seed: last.seed });
+      }, 500);
+    } else {
+      restoredRef.current = true;
+    }
+  }, [sessions.hydrated, sessions.activeSession, snapshot?.has_image, paintDream]);
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -125,7 +181,7 @@ export function DesktopDream() {
   }
 
   return (
-    <div className="pointer-events-auto flex flex-col gap-3">
+    <div className="pointer-events-auto flex flex-col gap-3" data-testid="desktop-dream">
       <div className="rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-white shadow-lg backdrop-blur">
         <div className="flex items-center justify-between">
           <p className="text-[10px] uppercase tracking-widest text-white/50">
@@ -138,19 +194,24 @@ export function DesktopDream() {
           <PhaseDot phase={phase} />
         </div>
         <p className="mt-1 min-h-[1.25rem] text-sm leading-snug text-white/80">
-          {lastPrompt || (phase === "live" ? "Walk with W A S D · look with the mouse" : DEFAULT_HINT)}
+          {lastPrompt ||
+            (phase === "live"
+              ? "Walk with W A S D · look with the mouse"
+              : "a sunlit alpine meadow at golden hour, wildflowers, distant snow-capped peaks")}
         </p>
         {error && <p className="mt-1 text-xs text-red-300">{error}</p>}
       </div>
-      <form onSubmit={onSubmit} className="flex gap-2">
+      <form onSubmit={onSubmit} className="flex gap-2" data-testid="desktop-dream-form">
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Describe a new dream…"
+          data-testid="desktop-dream-input"
           className="flex-1 rounded-full border border-white/10 bg-black/60 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:border-white/30 focus:outline-none"
         />
         <button
           type="submit"
+          data-testid="desktop-dream-paint"
           className="rounded-full bg-white px-5 py-3 text-sm font-medium text-black hover:bg-white/90"
         >
           Paint
@@ -160,7 +221,7 @@ export function DesktopDream() {
   );
 }
 
-const DEFAULT_HINT = "a misty pine forest at dawn, fog between the trees";
+const DEFAULT_HINT = "a sunlit alpine meadow at golden hour, wildflowers, distant snow-capped peaks";
 
 function PhaseDot({ phase }: { phase: "idle" | "loading" | "live" }) {
   const color =

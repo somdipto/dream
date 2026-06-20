@@ -11,6 +11,7 @@ import {
 import { useVoice } from "../hooks/useVoice";
 import { generateSeedImage } from "../lib/seed-image";
 import { composeScenePrompt } from "../lib/scene-composer";
+import { useSessions } from "./SessionProvider";
 
 // The single hero surface of the app.
 //
@@ -39,6 +40,7 @@ export function VoiceDream() {
   const { status, uploadFile, setImage, setPrompt, start, reset } = useLingbot();
   const [snapshot, setSnapshot] = useState<LingbotStateMessage | null>(null);
   const voice = useVoice();
+  const sessions = useSessions();
   const [phase, setPhase] = useState<"idle" | "loading" | "live">("idle");
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -166,6 +168,11 @@ export function VoiceDream() {
         // 6. Start the generation. New scene, fresh world.
         await start();
         setPhase("live");
+        // 7. Append to active session. This is the "LiveVocs" hookup:
+        //    every spoken phrase is automatically added to the current
+        //    session screen. `addScene` auto-creates a session if none
+        //    is active so memory is never lost.
+        sessions.addScene({ prompt: text, seed });
       } catch (e: any) {
         setError(e?.message ?? String(e));
         if (!generating) setPhase("idle");
@@ -182,7 +189,7 @@ export function VoiceDream() {
         }
       }
     },
-    [ready, generating, snapshot?.has_image, snapshot?.has_prompt, uploadFile, setImage, setPrompt, start, reset]
+    [ready, generating, snapshot?.has_image, snapshot?.has_prompt, uploadFile, setImage, setPrompt, start, reset, sessions]
   );
 
   // The user's explicit mic intent. M3.5: clicking the mic while
