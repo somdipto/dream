@@ -334,7 +334,7 @@ function DesktopDefaultScene({
         console.log("[ss] DesktopDefaultScene uploading");
         const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
         // eslint-disable-next-line no-console
-        console.log("[ss] DesktopDefaultScene uploaded", ref?.upload_id ?? ref);
+        console.log("[ss] DesktopDefaultScene uploaded", JSON.stringify(ref));
         await setImage({ image: ref });
         // eslint-disable-next-line no-console
         console.log("[ss] DesktopDefaultScene setImage done");
