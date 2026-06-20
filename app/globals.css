@@ -137,3 +137,13 @@ html.cursor-hidden textarea {
   75%  { background-position:   0% 100%; }
   100% { background-position:   0%   0%; }
 }
+
+/* QA5 / F5: scene-fade pulse. Fires on every new image
+   from the SDK so the world has a sense of "the painter
+   just laid down a new canvas" instead of hard-cutting
+   between frames. */
+@keyframes dream-pulse {
+  0%   { opacity: 0; transform: scale(1.04); }
+  35%  { opacity: 1; transform: scale(1.00); }
+  100% { opacity: 0; transform: scale(1.00); }
+}

@@ -143,14 +143,21 @@ function clientIp(headers: Headers, trustProxy: boolean): string {
   if (fly) return fly;
   const tci = headers.get("true-client-ip")?.trim();
   if (tci) return tci;
-  // Last resort: bucket by User-Agent hash. Same UA across
-  // users still collides but realistically users on the same
-  // browser+major-version are still rare.
+  // Last resort: bucket by User-Agent + Accept-Language hash.
+  // QA5: mixing Accept-Language into the hash makes the
+  // bucket stable across browser updates. Previously the
+  // bucket was UA-only, so a user on iOS 18 → iOS 19 lost
+  // their bucket on update and suddenly hit a fresh burst
+  // quota. UA and language both evolve in the same way —
+  // they're not perfect, but they cluster on the same
+  // "this is roughly the same user" feature.
   const ua = headers.get("user-agent") ?? "";
   if (ua) {
+    const lang = headers.get("accept-language") ?? "";
     // Tiny non-cryptographic hash; we just need stable bucketing.
     let h = 5381;
-    for (let i = 0; i < ua.length; i++) h = ((h * 33) ^ ua.charCodeAt(i)) >>> 0;
+    const s = ua + "|" + lang;
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
     return `ua-${h.toString(36)}`;
   }
   return "unknown";

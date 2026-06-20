@@ -7,6 +7,7 @@ import {
   useLingbotState,
 } from "@reactor-models/lingbot";
 import { recordBlackScreen } from "../lib/black-screen-log";
+import { setLastImageUrl } from "./SessionSidebar";
 
 // Full-bleed background video. `<LingbotMainVideoView>` is a pre-bound
 // `<ReactorView track="main_video">` from the typed SDK — no refs, no
@@ -142,6 +143,14 @@ export function Video() {
     // flood the log with one event per second. One event per
     // dark episode is enough.
     const darkSinceRef = { current: 0 };
+    // QA5: cache the tainted-canvas state. Without this,
+    // every 2-second tick tries drawImage + getImageData on
+    // the cross-origin Lingbot video, throws SecurityError,
+    // and we silently `setDarkFrames(false)` — meaning a
+    // genuinely dark scene is never detected. After the
+    // first failed draw we skip the per-tick work and
+    // respect the previous dark-frame state.
+    let canvasTainted = false;
     function sampleDark() {
       const v = document.querySelector('[data-testid="video-stage"] video');
       if (!(v instanceof HTMLVideoElement)) return;
@@ -158,6 +167,16 @@ export function Video() {
             note: "video element has 0x0 dimensions — likely never started",
           });
         }
+        return;
+      }
+      if (canvasTainted) {
+        // We already know the canvas is tainted. We can't
+        // sample — but don't blindly mark the video as
+        // fine either. If the previous sample said dark,
+        // keep showing the dark overlay; if it said fine,
+        // keep showing fine. This stops the regression
+        // where a tainted canvas always reported "fine"
+        // even when the video was completely black.
         return;
       }
       try {
@@ -190,13 +209,22 @@ export function Video() {
           darkSinceRef.current = 0;
         }
       } catch {
-        // CORS-tainted canvas — assume fine.
-        setDarkFrames(false);
+        // CORS-tainted canvas — cache the tainted state
+        // and leave darkFrames at its last known value
+        // (instead of clobbering it with false). The
+        // previous code unconditionally setDarkFrames(false)
+        // which would mask a genuinely black video behind
+        // a tainted canvas.
+        canvasTainted = true;
       }
     }
     darkWatchdogRef.current = setInterval(sampleDark, 2000);
-    // Sample once on enter, then every 2s.
-    sampleDark();
+    // QA5: do NOT sample on the first tick — the video
+    // element starts at 0x0, so the immediate sample
+    // would always log a "0x0 dimensions" black-screen
+    // event for a totally normal startup. The interval
+    // will sample 2s later, by which point the video has
+    // its real dimensions.
     return () => {
       if (darkWatchdogRef.current) {
         clearInterval(darkWatchdogRef.current);
@@ -206,6 +234,38 @@ export function Video() {
   }, [phase]);
 
   const showOverlay = phase !== "playing" || now < paintGraceUntil;
+
+  // QA5 / F5: scene-fade transition. When a new paint
+  // arrives, fade the previous frame out to a warm cream
+  // briefly, then fade the new frame in. This hides the
+  // "frame pop" when the SDK emits a near-black first
+  // chunk and gives the world a sense of breathing.
+  // Driven by `pulseKey` which increments every time the
+  // SDK reports a new `image_accepted` event.
+  const [pulseKey, setPulseKey] = useState(0);
+  const lastImageRef = useRef<string | null>(null);
+  useEffect(() => {
+    const img = snapshot?.image_url ?? null;
+    if (img && img !== lastImageRef.current) {
+      lastImageRef.current = img;
+      setPulseKey((k) => k + 1);
+      // QA5/F4: keep the in-memory snapshot URL buffer in
+      // sync so a user-triggered "Download as PNG" can
+      // reach the freshest frame without re-rendering.
+      setLastImageUrl(img);
+    }
+  }, [snapshot?.image_url]);
+  const [pulseTick, setPulseTick] = useState(0);
+  useEffect(() => {
+    if (pulseKey === 0) return;
+    setPulseTick(pulseKey);
+    const t = setTimeout(() => {
+      // After the fade completes, drop the tick so the
+      // overlay is fully transparent and not animating.
+      setPulseTick(0);
+    }, 700);
+    return () => clearTimeout(t);
+  }, [pulseKey]);
 
   return (
     // M9.13: the old `bg-[#0a0612]` (deep purple-black) was
@@ -250,6 +310,26 @@ export function Video() {
           videoObjectFit="cover"
         />
       </div>
+
+      {/* QA5/F5: scene-fade transition overlay. A warm
+          cream flash that pulses for 700ms every time a
+          new image_accepted lands, hiding the SDK's
+          near-black first chunks and giving the world a
+          sense of motion. Backed by a CSS keyframe so we
+          don't re-render on every frame. */}
+      <div
+        key={pulseTick}
+        data-testid="video-pulse"
+        aria-hidden="true"
+        className={[
+          "pointer-events-none absolute inset-0",
+          pulseTick > 0 ? "animate-[dream-pulse_700ms_ease-out_forwards]" : "opacity-0",
+        ].join(" ")}
+        style={{
+          background:
+            "radial-gradient(ellipse at center, rgba(255,243,232,0.65) 0%, rgba(255,243,232,0.0) 60%)",
+        }}
+      />
 
       {showOverlay && (
         <div

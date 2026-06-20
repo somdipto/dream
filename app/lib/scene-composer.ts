@@ -32,6 +32,22 @@ export interface ScenePromptOptions {
 // scene description and well within the model's comfort zone.
 export const MAX_PROMPT_CHARS = 500;
 
+// QA5: the composed prompt body is the user's text plus
+// the camera/motion grammar (~460 chars of overhead). The
+// server's actual cap on the full composed prompt is around
+// 1200 chars; longer prompts produce a "prompt too long"
+// error that surfaces to the user as "Couldn't connect —
+// try again in a moment." We trim the user's body block
+// to fit, prioritizing the first 600 chars of their
+// description (the model uses the leading descriptors more
+// than the trailing adjectives).
+const COMPOSED_OVERHEAD = CAMERA_GRAMMAR.length + MOTION_HINT.length + 80; // opener
+const MAX_COMPOSED_PROMPT_CHARS = 1200;
+const MAX_BODY_CHARS = Math.max(
+  100,
+  MAX_COMPOSED_PROMPT_CHARS - COMPOSED_OVERHEAD,
+);
+
 /**
  * Compose a full Lingbot prompt from a user phrase. The output is always a
  * self-contained paragraph the model can use as a complete description.
@@ -51,9 +67,16 @@ export function composeScenePrompt({ text, isFirst = false }: ScenePromptOptions
     ? `This is a third-person-view video of ${subject}.`
     : `The scene now shifts: ${subject}.`;
 
+  // QA5: trim the body to fit under MAX_COMPOSED_PROMPT_CHARS.
+  // The previous code passed the full body through, and the
+  // desktop default scene's prompt + camera grammar exceeded
+  // Reactor's server cap, producing a "prompt too long"
+  // error the user couldn't recover from without a refresh.
+  const body = text.trim().replace(/\s+/g, " ").slice(0, MAX_BODY_CHARS);
+
   return [
     opener,
-    text.trim().replace(/\s+/g, " "),
+    body,
     CAMERA_GRAMMAR,
     MOTION_HINT,
   ]
@@ -89,7 +112,12 @@ function cleanSubject(text: string): string {
   if (!t || t.length < 3) return "an atmospheric environment";
   // Lowercase first letter only if it doesn't start with a proper noun heuristic
   const lowered = t.charAt(0).toLowerCase() + t.slice(1);
-  return lowered || "an atmospheric environment";
+  // QA5: cap the subject too. Previously a 5k-character
+  // user input bubbled into the opener ("This is a
+  // third-person-view video of <5k chars>.") and pushed
+  // the composed prompt past Reactor's 1200-char server
+  // cap. The body trim alone wasn't enough.
+  return (lowered || "an atmospheric environment").slice(0, 240);
 }
 
 // M3: composeMutationPrompt removed. Every prompt now goes through a

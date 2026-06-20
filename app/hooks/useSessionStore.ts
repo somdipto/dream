@@ -74,10 +74,19 @@ export function useSessionStoreImpl(): UseSessionStore {
     // Skip the very first save after hydration — loadFromStorage
     // already wrote the data; we don't need to write it back verbatim.
     if (sessions.length === 0 && activeId === null) return;
-    const result = saveToStorage(sessions, activeId, { pruneOnQuota: true });
-    if (!result.ok && result.reason === "quota") {
-      setPruneNotice((n) => n + 1);
-    }
+    // QA5: debounce the save. Previously every state change
+    // (favorite toggle, scene add, etc.) wrote the full
+    // journal synchronously to localStorage, blocking the
+    // main thread for 5-20ms. Burst a 200ms debounce so a
+    // flurry of writes (e.g. painting 5 scenes quickly)
+    // coalesces into a single write.
+    const handle = setTimeout(() => {
+      const result = saveToStorage(sessions, activeId, { pruneOnQuota: true });
+      if (!result.ok && result.reason === "quota") {
+        setPruneNotice((n) => n + 1);
+      }
+    }, 200);
+    return () => clearTimeout(handle);
   }, [sessions, activeId, hydrated]);
 
   useEffect(() => {

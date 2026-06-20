@@ -61,8 +61,14 @@ async function fetchToken(): Promise<string> {
 // toward a clearly-lit, daytime, photo-real result. Repetition is
 // intentional; LingBot's prompt parser weights early + explicit
 // lighting words heavily.
+// QA5: shorter default desktop scene prompt. The previous
+// 454-char version + CAMERA_GRAMMAR + MOTION_HINT
+// exceeded Reactor's ~1200-char server cap, producing a
+// "prompt too long" error on first paint. This prompt
+// fits comfortably with the composer wrapper while still
+// describing a vivid scene.
 const DEFAULT_DESKTOP_PROMPT =
-  "a sunlit alpine meadow at golden hour, brightly lit, soft warm sunlight streaming from the upper left, vivid wildflowers in the foreground — red, yellow, blue, distant snow-capped peaks glowing in the sun, clear blue sky with soft cumulus clouds, butterflies, bees, shallow depth of field, vibrant saturated colors, hyper-realistic photo, 8K, cinematic lighting, well-exposed, no shadows in the foreground, no moody lighting, no night, no overcast";
+  "a sunlit alpine meadow at golden hour, soft warm sunlight from the upper left, vivid wildflowers in the foreground, distant snow-capped peaks, clear blue sky with soft cumulus clouds, butterflies, hyper-realistic, cinematic lighting";
 
 export function LingbotApp() {
   return (
@@ -763,8 +769,19 @@ function DreamSurface() {
   // showing, so a permanently-over-quota user doesn't get a fresh
   // toast every save. (Audit bug #22.)
   useEffect(() => {
+    // QA5: snapshot the pruneNotice at the moment the toast
+    // appears so the user sees "pruned N sessions" rather
+    // than a single deduped message. The previous behavior
+    // hid subsequent prunes behind a single "oldest
+    // sessions" toast — users had no idea their second or
+    // third prune happened.
     if (sessions.pruneNotice > 0 && !pruneToast) {
-      setPruneToast("Storage full — pruned oldest saved sessions.");
+      const n = sessions.pruneNotice;
+      setPruneToast(
+        n === 1
+          ? "Storage full — pruned oldest saved session."
+          : `Storage full — pruned ${n} oldest saved sessions.`,
+      );
       const t = setTimeout(() => setPruneToast(null), 4000);
       return () => clearTimeout(t);
     }
@@ -860,29 +877,42 @@ function DreamSurface() {
     sessions.createSession,
   ]);
 
+  // QA5: keep a ref to the in-flight teardown so a rapid
+  // double-tap of the Reset button doesn't kick off two
+  // parallel teardowns. Whichever loses the race is a
+  // no-op.
+  const resetInflightRef = useRef<Promise<void> | null>(null);
   const handleReset = useCallback(() => {
     // Order matters: await the voice teardown BEFORE disconnect so
     // the SDK teardown doesn't race the recogniser's audio handle.
     // Without the await, a slow Android Chrome can hand a still-
     // active mic to the next voice.start() and produce a
     // `NotAllowedError` (audit bug #17).
+    if (resetInflightRef.current) return;
     const teardown = async () => {
-      if (platform.isMobile) {
+      try {
+        if (platform.isMobile) {
+          try {
+            await voice.stop();
+          } catch {
+            // best-effort
+          }
+          voice.reset();
+        }
         try {
-          await voice.stop();
+          await disconnect();
         } catch {
           // best-effort
         }
-        voice.reset();
+      } finally {
+        // Always advance the Begin overlay, even if a step
+        // threw, otherwise the user is stuck on a black
+        // screen with no way back.
+        setHasBegun(false);
+        resetInflightRef.current = null;
       }
-      try {
-        await disconnect();
-      } catch {
-        // best-effort
-      }
-      setHasBegun(false);
     };
-    void teardown();
+    resetInflightRef.current = teardown();
   }, [disconnect, voice.stop, voice.reset, platform.isMobile]);
 
   // Auto-retry once on transient disconnect (hackathon wifi is flaky).
@@ -997,6 +1027,45 @@ function DreamSurface() {
           <h1 className="text-2xl font-semibold tracking-tight">
             Speak your dream into the world.
           </h1>
+          {/* QA5/F3: time-of-day greeting. The previous Begin
+              overlay said the same thing every time, so
+              returning users got the same wall of text. Now
+              the greeting is contextual — "Good morning" at
+              6am, "Late-night" after 11pm — and the empty-
+              state's first prompt rotates based on the hour
+              so each new session gets a fresh suggestion. */}
+          {(() => {
+            const h = new Date().getHours();
+            const greeting =
+              h < 5
+                ? "Late night"
+                : h < 12
+                  ? "Good morning"
+                  : h < 17
+                    ? "Good afternoon"
+                    : h < 21
+                      ? "Good evening"
+                      : "Late night";
+            const suggestion =
+              h < 12
+                ? "Try: a misty forest at sunrise"
+                : h < 17
+                  ? "Try: a Tokyo rooftop in the rain"
+                  : h < 21
+                    ? "Try: a desert canyon at sunset"
+                    : "Try: a neon-lit alley at midnight";
+            return (
+              <div className="mt-2 flex flex-col items-center gap-1">
+                <p
+                  className="text-[10px] uppercase tracking-[0.2em] text-white/45"
+                  data-testid="begin-greeting"
+                >
+                  {greeting}
+                </p>
+                <p className="text-[11px] text-white/55">{suggestion}</p>
+              </div>
+            );
+          })()}
           <p className="mt-2 text-sm text-white/60">
             {platform.isDesktop
               ? "A first scene paints itself. Then describe a new dream, or walk with W A S D and look with the mouse."
@@ -1581,6 +1650,16 @@ function ReactorErrorScreen({
   const [showByokPaste, setShowByokPaste] = useState(false);
   const [byokDraft, setByokDraft] = useState("");
   const [byokError, setByokError] = useState<string | null>(null);
+  // QA5: track whether a user key is currently saved so
+  // the user has a visible path to remove it. The previous
+  // flow: user pastes a key with a typo → 401 → fatal
+  // (no fall-through) → user sees "API key rejected"
+  // forever. Now they can clear the saved key and retry
+  // with the env pool.
+  const [hasUserKey, setHasUserKey] = useState(false);
+  useEffect(() => {
+    setHasUserKey(loadUserKey() !== null);
+  }, []);
   const onByokSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const v = byokDraft.trim();
@@ -1592,6 +1671,16 @@ function ReactorErrorScreen({
     }
     setByokError(null);
     setByokDraft("");
+    setShowByokPaste(false);
+    setHasUserKey(true);
+    bustNextToken();
+    onRetry();
+  };
+  const onRemoveUserKey = () => {
+    _clearUserKey();
+    setHasUserKey(false);
+    setByokDraft("");
+    setByokError(null);
     setShowByokPaste(false);
     bustNextToken();
     onRetry();
@@ -1644,6 +1733,21 @@ function ReactorErrorScreen({
           data-testid="reactor-error-byok-open"
         >
           Paste your own key
+        </button>
+      )}
+      {/* QA5: when a user key is already saved (a previous
+          session set it), the user needs a visible way to
+          remove it. Previously the only way to fall back to
+          the env pool was to wait for the key to expire, or
+          to clear localStorage by hand. */}
+      {showFallbackKeyRetry && hasUserKey && (
+        <button
+          type="button"
+          onClick={onRemoveUserKey}
+          className="mt-2 block w-full text-[10px] text-white/45 underline-offset-2 hover:text-white/75 hover:underline"
+          data-testid="reactor-error-byok-remove"
+        >
+          Remove your key and use the shared one
         </button>
       )}
       {showFallbackKeyRetry && showByokPaste && (

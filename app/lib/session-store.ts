@@ -203,23 +203,38 @@ export function saveToStorage(
         STORAGE_KEY,
         JSON.stringify({ version: SCHEMA_VERSION, sessions: pruned }),
       );
-      if (activeId === null) {
-        window.localStorage.removeItem(ACTIVE_KEY);
-      } else {
-        window.localStorage.setItem(ACTIVE_KEY, JSON.stringify(activeId));
-      }
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[session-store] quota exceeded; pruned to",
-        pruned.length,
-        "sessions",
-      );
-      return { ok: true };
     } catch (e2) {
       // eslint-disable-next-line no-console
       console.warn("[session-store] save still failed after prune:", e2);
       return { ok: false, reason: "quota" };
     }
+    // QA5: the activeKey write is best-effort. If it
+    // fails (still tight on quota for even the tiny
+    // ACTIVE_KEY write), the loader reconciles
+    // gracefully — loadFromStorage checks that the
+    // activeId actually exists in the sessions array and
+    // drops the orphan if not. Previously a failure here
+    // threw the whole `try` and reported "save failed"
+    // even though the session write succeeded.
+    try {
+      if (activeId === null) {
+        window.localStorage.removeItem(ACTIVE_KEY);
+      } else {
+        window.localStorage.setItem(ACTIVE_KEY, JSON.stringify(activeId));
+      }
+    } catch {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[session-store] active key write failed; loader will reconcile",
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[session-store] quota exceeded; pruned to",
+      pruned.length,
+      "sessions",
+    );
+    return { ok: true };
   }
 }
 
@@ -244,10 +259,16 @@ export function restoreCorruptBackup(): { sessions: Session[] } | null {
     return null;
   }
   if (keys.length === 0) return null;
-  // Sort newest first (the timestamp suffix).
+  // Sort newest first. Key format is
+  //   `${CORRUPT_BACKUP_KEY}.<timestampMs>.<randomSuffix>` —
+  // segment [1] is the timestamp, segment [2] is the random
+  // suffix used for collision avoidance. The previous code
+  // sorted by `.pop()` (the random suffix), which meant the
+  // newest corrupt journal was NOT necessarily the first one
+  // restored. Restore order now matches creation order.
   keys.sort((a, b) => {
-    const ta = Number(a.split(".").pop() ?? 0);
-    const tb = Number(b.split(".").pop() ?? 0);
+    const ta = Number(a.split(".")[1] ?? 0);
+    const tb = Number(b.split(".")[1] ?? 0);
     return tb - ta;
   });
   for (const k of keys) {

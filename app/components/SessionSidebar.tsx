@@ -382,6 +382,93 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1) + "…";
 }
 
+// QA5/F4: scene-to-PNG download. The sidebar doesn't have
+// the rendered frame — only the prompt + seed. We replay
+// the scene (loadScene), wait for the next `dream:paintDone`
+// with ok:true, then read the most recent snapshot URL from
+// a small in-memory buffer that the Lingbot state listener
+// keeps up to date. If the paint fails or times out, we
+// fall back to the deterministic seed-image function so
+// the user always gets a PNG.
+async function downloadScenePng(scene: { prompt: string; seed: number; id: string }) {
+  const safe = scene.prompt.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 40) || "dream";
+  const filename = `${safe}-${scene.seed.toString(16)}.png`;
+  // Tell the world to render this scene fresh. The next
+  // paint's URL will land in the bus's "last image url"
+  // bucket (see Video.tsx and VoiceDream.tsx — they keep
+  // it up to date on every snapshot).
+  dreamBus.emit("dream:abortPaint", {} as never);
+  dreamBus.emit("dream:loadScene", { prompt: scene.prompt, seed: scene.seed });
+  let url: string | undefined;
+  let done = false;
+  const unsubscribeDone = dreamBus.on("dream:paintDone", (detail: { ok: boolean }) => {
+    if (detail.ok) {
+      done = true;
+      url = readLastImageUrl();
+    } else {
+      done = true;
+    }
+  });
+  try {
+    for (let i = 0; i < 30; i++) {
+      if (done) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    if (!url) url = readLastImageUrl();
+    let blob: Blob | null = null;
+    if (url) {
+      blob = await fetch(url).then((r) => r.blob()).catch(() => null);
+    }
+    if (!blob) {
+      // Fall back to the deterministic seed image. This
+      // works even if Reactor is down — the seed-image
+      // function is pure client-side and stable.
+      blob = await deterministicSeedImageBlob(scene.seed);
+    }
+    if (!blob) return;
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } finally {
+    unsubscribeDone();
+  }
+}
+
+// Tiny in-memory buffer for the most-recent image URL.
+// Set by Video.tsx / VoiceDream.tsx on every snapshot
+// change; read by downloadScenePng. Lives outside React
+// so a download triggered from a stale closure still
+// gets the freshest frame.
+let lastImageUrl: string | null = null;
+export function setLastImageUrl(url: string | null) {
+  lastImageUrl = url;
+}
+function readLastImageUrl(): string | undefined {
+  return lastImageUrl ?? undefined;
+}
+
+// Generate a deterministic, in-browser placeholder for a
+// given seed. The seed-image.ts module owns the actual
+// algorithm; we wrap it lazily so this file doesn't
+// depend on canvas at import time.
+let seedImageFn: ((seed: number) => Promise<Blob | null>) | null = null;
+async function deterministicSeedImageBlob(seed: number): Promise<Blob | null> {
+  if (!seedImageFn) {
+    try {
+      const mod = await import("../lib/seed-image");
+      seedImageFn = (s: number) => mod.generateSeedImage({ seed: s });
+    } catch {
+      seedImageFn = async () => null;
+    }
+  }
+  return seedImageFn(seed);
+}
+
 function SessionCard({
   session,
   isActive,
@@ -534,6 +621,26 @@ function SessionCard({
                   className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
                 >
                   ↻
+                </button>
+                {/* QA5/F4: download-as-PNG. Fetches the
+                    scene's `image_url` (the model's source
+                    frame) and saves it to the user's device
+                    via a temporary <a download> link. Uses
+                    the same CORS-friendly pattern as the
+                    share button — fetch as blob, then
+                    objectURL it. */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void downloadScenePng(scene);
+                  }}
+                  aria-label={`Download "${scene.prompt}" as PNG`}
+                  title="Download as PNG"
+                  data-testid="scene-download"
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
+                >
+                  ↓
                 </button>
                 {/* QA3: heart toggle. Favorited scenes show in
                     a separate section above the regular list

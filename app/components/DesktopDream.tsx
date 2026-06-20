@@ -66,6 +66,10 @@ export function DesktopDream() {
   // so an in-flight paint doesn't commit its scene to the wrong
   // journal after the active session has already changed.
   const abortedRef = useRef(false);
+  // QA5: paintEpoch bumps on every new paint. Captured at
+  // paint start, checked in the post-paint success path so
+  // stale paints don't write to the journal.
+  const paintEpochRef = useRef(0);
   // ID of the deferred re-paint `setTimeout` so we can cancel it on
   // unmount (prevents a torn-down provider from receiving paint
   // commands) and on a new paint starting before the previous one
@@ -76,12 +80,18 @@ export function DesktopDream() {
   // post-timeout `setPhase("idle")` branch can fire even when the
   // world is actively generating. (Audit bug #5.)
   const snapshotRef = useRef<LingbotStateMessage | null>(null);
+  // QA5: also mirror `generating` so paintDream has a stable
+  // identity. Reading from a ref inside the closure (instead
+  // of taking `generating` as a dep) means the callback
+  // doesn't re-bind on every snapshot chunk.
+  const generatingRef = useRef(false);
 
   // Wrap the state callback in `useCallback` with stable deps so the
   // SDK doesn't unsubscribe/resubscribe on every render.
   const onState = useCallback((msg: LingbotStateMessage) => {
     setSnapshot(msg);
     snapshotRef.current = msg;
+    generatingRef.current = msg.started === true;
   }, []);
   useLingbotState(onState);
 
@@ -155,6 +165,9 @@ export function DesktopDream() {
         return;
       }
       inFlightRef.current = true;
+      // QA5: bump the epoch so stale post-paint effects
+      // don't write to the journal after an abort.
+      const myEpoch = ++paintEpochRef.current;
       setError(null);
       setLastPrompt(t);
       setPhase("loading");
@@ -173,7 +186,7 @@ export function DesktopDream() {
           // `useLingbotGenerationReset` will never fire a callback.
           // Race the reset promise against 1.5s and treat timeout as
           // "no reset was needed, proceed". (Audit bug #2.)
-          if (generating || snapshotRef.current?.has_image) {
+          if (generatingRef.current || snapshotRef.current?.has_image) {
             const resetDone = new Promise<void>((resolve) => {
               resetReadyRef.current = resolve;
             });
@@ -251,16 +264,23 @@ export function DesktopDream() {
         dreamBus.emit("dream:paintDone", { ms: paintMs, ok: true });
       } else if (result === "err") {
         setError("Generation failed — your prompt is saved, try again in a moment");
-        if (!generating) setPhase("idle");
+        if (!generatingRef.current) setPhase("idle");
         dreamBus.emit("dream:paintDone", { ms: paintMs, ok: false });
       } else {
         setError("Reactor is slow — your prompt is saved. The world may still be painting in the background.");
-        if (!generating) setPhase("idle");
+        if (!generatingRef.current) setPhase("idle");
         dreamBus.emit("dream:paintDone", { ms: paintMs, ok: false });
       }
       inFlightRef.current = false;
       // Consume the pose lock — only affects the next paint.
       if (poseLocked) setPoseLocked(false);
+      // QA5: epoch check. The abort handler bumps the
+      // epoch when a sidebar pick happens. The old paint's
+      // post-paint effect must not run if the epoch has
+      // moved.
+      if (myEpoch !== paintEpochRef.current) {
+        return;
+      }
       // If the active session changed mid-paint (sidebar pick), the
       // scene we just painted would be saved to the wrong journal.
       // The `abortedRef` flag is set by the `dream:abortPaint` event
@@ -278,17 +298,26 @@ export function DesktopDream() {
         // Track this re-paint so we can cancel it on unmount and on
         // a sidebar-driven abort.
         if (repaintTimerRef.current !== null) clearTimeout(repaintTimerRef.current);
-        repaintTimerRef.current = setTimeout(() => {
-          repaintTimerRef.current = null;
+        // QA5: queueMicrotask drains the queue before the
+        // event loop yields. The old setTimeout(0) left a
+        // window where a parallel paint call could set
+        // inFlightRef=true and the drain would then re-queue
+        // onto the new paint. Also re-check inFlightRef
+        // inside the drain.
+        queueMicrotask(() => {
+          if (inFlightRef.current) {
+            queuedRef.current = next;
+            return;
+          }
           void paintDream(next);
-        }, 0);
+        });
       }
     },
     // paintDream no longer depends on `snapshot` — it reads the live
     // value from `snapshotRef`. The fewer deps, the more stable the
     // function identity, the less the `dream:loadScene` listener
     // re-binds. (Audit bug #4.)
-    [generating, uploadFile, setImage, setPrompt, start, reset, poseLocked],
+    [uploadFile, setImage, setPrompt, start, reset, poseLocked],
   );
 
   // Listen for scene-load events from the sidebar OR from the share-URL
@@ -318,6 +347,12 @@ export function DesktopDream() {
   useEffect(() => {
     return dreamBus.on("dream:abortPaint", () => {
       abortedRef.current = true;
+      // QA5: bump the epoch so the in-flight paint's post-paint
+      // success commit (which can fire AFTER this abort) is
+      // short-circuited. Without this, the old paint commits
+      // its scene to the new active session and the user sees
+      // their old phrase displayed in the new world.
+      paintEpochRef.current += 1;
       // Cancel any pending deferred re-paint as well — there's a new
       // paint on the way and the queued one would land in the
       // wrong journal.
@@ -325,6 +360,11 @@ export function DesktopDream() {
         clearTimeout(repaintTimerRef.current);
         repaintTimerRef.current = null;
       }
+      // QA5: clear the queue AND the in-flight flag so the
+      // next paint starts with a clean slate and the old
+      // paint's post-paint drain doesn't fire a stale phrase.
+      queuedRef.current = null;
+      inFlightRef.current = false;
     });
   }, []);
 
@@ -401,18 +441,28 @@ export function DesktopDream() {
   // Also routes the transcript through `parseVoiceStyle` so spoken
   // phrases like "in noir style" or "at sunset" toggle the chip
   // system and produce a cleaner prompt for the model.
+  // QA5: styleId/variantId live in refs so onFinalCb has a
+  // stable identity. Previously, every chip click re-bound
+  // the voice listener and any `isFinal` event that landed
+  // between the unsub and resub was dropped.
+  const styleIdRef = useRef(styleId);
+  const variantIdRef = useRef(variantId);
+  useEffect(() => { styleIdRef.current = styleId; }, [styleId]);
+  useEffect(() => { variantIdRef.current = variantId; }, [variantId]);
   const onFinalCb = useCallback((text: string) => {
     const t = text.trim();
     if (!t) return;
     const parsed = parseVoiceStyle(t);
-    if (parsed.styleId && parsed.styleId !== styleId) setStyleId(parsed.styleId);
-    if (parsed.variantId && parsed.variantId !== variantId) setVariantId(parsed.variantId);
+    const sid = styleIdRef.current;
+    const vid = variantIdRef.current;
+    if (parsed.styleId && parsed.styleId !== sid) setStyleId(parsed.styleId);
+    if (parsed.variantId && parsed.variantId !== vid) setVariantId(parsed.variantId);
     const cleaned = parsed.cleanedPrompt || t;
     setText(cleaned);
     const seed = hashSeed(cleaned + ":" + sessionNonceRef.current.toString(16)) >>> 0;
     sessions.addScene({ prompt: cleaned, seed });
     void paintDream(cleaned, { seed });
-  }, [paintDream, sessions, styleId, variantId]);
+  }, [paintDream, sessions]);
   useEffect(() => {
     if (!voice.supported) return;
     return voice.onFinal(onFinalCb);
