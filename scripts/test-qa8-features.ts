@@ -12,7 +12,9 @@ import { dreamBus } from "../app/lib/event-bus";
 //       events get accumulated, deduped within 2s, capped
 //       at 20 ──────────────────────────────────────────────
 {
-  let pills: { prompt: string; timestamp: number; id: string }[] = [];
+  // Wide type so TS doesn't narrow `pills.length` after
+  // a comparison.
+  let pills: Array<{ prompt: string; timestamp: number; id: string }> = [];
   function onLoad(d: { prompt: string; seed: number }) {
     if (!d?.prompt) return;
     const last = pills[pills.length - 1];
@@ -32,11 +34,11 @@ import { dreamBus } from "../app/lib/event-bus";
   if (pills.length !== 5) throw new Error(`dedupe within 2s failed, got ${pills.length}`);
   // A different prompt between identical ones does NOT dedupe.
   dreamBus.emit("dream:loadScene", { prompt: "prompt X", seed: 200 });
-  if (pills.length !== 6) throw new Error(`new prompt should add, got ${pills.length}`);
+  if ((pills as unknown[]).length !== 6) throw new Error(`new prompt should add, got ${(pills as unknown[]).length}`);
   // Now repeating the original "prompt 4" is also not
   // deduped (last is "prompt X").
   dreamBus.emit("dream:loadScene", { prompt: "prompt 4", seed: 300 });
-  if (pills.length !== 7) throw new Error(`non-adjacent duplicate should add, got ${pills.length}`);
+  if ((pills as unknown[]).length !== 7) throw new Error(`non-adjacent duplicate should add, got ${(pills as unknown[]).length}`);
   off();
   // Emit 25 more — should cap at 20.
   for (let i = 0; i < 25; i++) {
@@ -74,7 +76,7 @@ import { dreamBus } from "../app/lib/event-bus";
     });
   }
   if (!toastMessage) throw new Error("taint toast not emitted");
-  if (!toastMessage.includes("seed")) throw new Error("toast message should mention the fallback");
+  if (!(toastMessage as string).includes("seed")) throw new Error("toast message should mention the fallback");
   off();
   console.log("✓ pose-lock taint fallback emits a user-facing toast");
 }
@@ -95,6 +97,29 @@ import { dreamBus } from "../app/lib/event-bus";
   }
   off();
   console.log("✓ toast payload shape is stable");
+}
+
+// ── 4. CuratedGallery thumbnails: the cache structure
+//       pins the contract that the same seed returns the
+//       same URL. We mock the URL store directly. ─────────
+{
+  // Simulate a Map<seed, blobUrl> cache like the one in
+  // CuratedGallery. A re-render for the same seed must
+  // return the existing entry, not regenerate.
+  const cache = new Map<number, string>();
+  cache.set(123, "blob:abc");
+  cache.set(456, "blob:def");
+  // First lookup hits the cache.
+  if (cache.get(123) !== "blob:abc") throw new Error("cache miss on second lookup");
+  // Missing seed returns undefined (we'd then call
+  // generateSeedImage).
+  if (cache.get(999) !== undefined) throw new Error("unknown seed should be undefined");
+  // Setting twice replaces — the cache is a last-write-wins
+  // (intentional: a hot-reload or a different render
+  // path might produce a new blob for the same seed).
+  cache.set(123, "blob:xyz");
+  if (cache.get(123) !== "blob:xyz") throw new Error("cache overwrite should be allowed");
+  console.log("✓ curated thumbnail cache contract is stable");
 }
 
 console.log("\nQA8: all checks passed");

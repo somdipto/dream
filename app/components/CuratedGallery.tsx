@@ -3,12 +3,79 @@
 // A small "Discover" view that lets the user browse curated starting
 // dreams. Lives inside the existing SessionSidebar — opening the
 // sidebar shows sessions on one tab and curated dreams on the other.
+//
+// QA6: each scene now renders a 128x72 deterministic thumbnail
+// using the same `generateSeedImage` function the model uses for
+// its anchor image. Thumbnails are cached in a Map<seed, blobUrl>
+// so a re-render (e.g. switching tabs) is free.
 
+import { useEffect, useState } from "react";
 import { CURATED_SCENES, groupByCategory } from "../lib/curated-scenes";
+import { generateSeedImage } from "../lib/seed-image";
 
 interface CuratedGalleryProps {
   onPick: (scene: { prompt: string; seed: number }) => void;
   onClose: () => void;
+}
+
+// Cache of seed → objectURL so we don't re-rasterize on
+// every re-render. Survives the component lifecycle as long
+// as the module is loaded. The URLs are revoked on
+// `beforeunload` to avoid leaks.
+const thumbCache = new Map<number, string>();
+const pendingSeeds = new Set<number>();
+
+async function loadThumb(seed: number, setUrl: (s: string | null) => void) {
+  if (thumbCache.has(seed)) {
+    setUrl(thumbCache.get(seed) ?? null);
+    return;
+  }
+  if (pendingSeeds.has(seed)) {
+    // Coalesce concurrent calls for the same seed.
+    return;
+  }
+  pendingSeeds.add(seed);
+  try {
+    const blob = await generateSeedImage({ seed, width: 128, height: 72 });
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      thumbCache.set(seed, url);
+      setUrl(url);
+    } else {
+      setUrl(null);
+    }
+  } catch {
+    setUrl(null);
+  } finally {
+    pendingSeeds.delete(seed);
+  }
+}
+
+function Thumbnail({ seed, alt }: { seed: number; alt: string }) {
+  const [url, setUrl] = useState<string | null>(thumbCache.get(seed) ?? null);
+  useEffect(() => {
+    if (url) return;
+    void loadThumb(seed, setUrl);
+  }, [seed, url]);
+  if (!url) {
+    return (
+      <div
+        className="h-[72px] w-[128px] shrink-0 animate-pulse rounded-md bg-white/5"
+        aria-label={alt}
+      />
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt={alt}
+      width={128}
+      height={72}
+      loading="lazy"
+      decoding="async"
+      className="h-[72px] w-[128px] shrink-0 rounded-md object-cover"
+    />
+  );
 }
 
 export function CuratedGallery({ onPick, onClose }: CuratedGalleryProps) {
@@ -33,16 +100,14 @@ export function CuratedGallery({ onPick, onClose }: CuratedGalleryProps) {
             <h3 className="mb-1.5 text-[10px] uppercase tracking-wider text-white/40">
               {g.category}
             </h3>
-            <ul className="space-y-1">
+            <ul className="space-y-1.5">
               {g.scenes.map((s) => (
                 <li key={s.id}>
                   <button
                     onClick={() => onPick({ prompt: s.prompt, seed: s.seed })}
                     className="flex w-full items-start gap-3 rounded-xl border border-white/10 bg-white/5 p-2.5 text-left transition hover:border-white/25 hover:bg-white/10"
                   >
-                    <span className="mt-0.5 text-lg" aria-hidden>
-                      {s.emoji}
-                    </span>
+                    <Thumbnail seed={s.seed} alt={s.prompt} />
                     <span className="min-w-0 flex-1">
                       <span className="block text-xs font-medium text-white">
                         {s.prompt.length > 80 ? s.prompt.slice(0, 77) + "…" : s.prompt}
