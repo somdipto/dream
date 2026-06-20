@@ -8,6 +8,7 @@ import {
   useLingbotGenerationReset,
   type LingbotStateMessage,
 } from "@reactor-models/lingbot";
+import { useVoice } from "../hooks/useVoice";
 import { generateSeedImage } from "../lib/seed-image";
 import { composeScenePrompt } from "../lib/scene-composer";
 import { useSessions } from "./SessionProvider";
@@ -24,6 +25,7 @@ import { useSessions } from "./SessionProvider";
 export function DesktopDream() {
   const { uploadFile, setImage, setPrompt, start, reset } = useLingbot();
   const sessions = useSessions();
+  const voice = useVoice();
   const [snapshot, setSnapshot] = useState<LingbotStateMessage | null>(null);
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
   const [lastSeed, setLastSeed] = useState<number | null>(null);
@@ -170,6 +172,59 @@ export function DesktopDream() {
     return () => window.removeEventListener("dream:loadScene", onLoad as EventListener);
   }, [paintDream]);
 
+  // Desktop voice: push-to-talk via spacebar OR the mic button. Same
+  // engine as mobile (Web Speech API → onFinal → paint). The mic
+  // starts when the user holds space, stops when they release. The
+  // committed transcript on release flows into paintDream exactly
+  // like a typed prompt.
+  const pushToTalkRef = useRef(false);
+  useEffect(() => {
+    if (!voice.supported) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      const tag = (e.target as HTMLElement | null)?.tagName ?? "";
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (pushToTalkRef.current) return;
+      pushToTalkRef.current = true;
+      e.preventDefault();
+      try {
+        voice.start();
+      } catch {
+        // voice may already be listening
+      }
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      if (!pushToTalkRef.current) return;
+      pushToTalkRef.current = false;
+      try {
+        voice.commit();
+        voice.stop();
+      } catch {
+        // ignore
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [voice]);
+
+  // Auto-paint when voice commits a phrase.
+  useEffect(() => {
+    if (!voice.supported) return;
+    return voice.onFinal((text) => {
+      const t = text.trim();
+      if (!t) return;
+      setText(t);
+      const seed = hashSeed(t + ":" + sessionNonceRef.current.toString(16)) >>> 0;
+      sessions.addScene({ prompt: t, seed });
+      void paintDream(t, { seed });
+    });
+  }, [voice, sessions, paintDream]);
+
   // On first ready + no active session, also re-paint the last scene
   // of the active session if it has one. (The default-scene
   // auto-paint handles the "first launch" case; this handles the
@@ -236,6 +291,67 @@ export function DesktopDream() {
           data-testid="desktop-dream-input"
           className="flex-1 rounded-full border border-white/10 bg-black/60 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:border-white/30 focus:outline-none"
         />
+        {voice.supported && (
+          <button
+            type="button"
+            onMouseDown={() => {
+              pushToTalkRef.current = true;
+              try {
+                voice.start();
+              } catch {
+                // ignore
+              }
+            }}
+            onMouseUp={() => {
+              pushToTalkRef.current = false;
+              try {
+                voice.commit();
+                voice.stop();
+              } catch {
+                // ignore
+              }
+            }}
+            onMouseLeave={() => {
+              if (!pushToTalkRef.current) return;
+              pushToTalkRef.current = false;
+              try {
+                voice.commit();
+                voice.stop();
+              } catch {
+                // ignore
+              }
+            }}
+            onTouchStart={(e) => {
+              e.preventDefault();
+              pushToTalkRef.current = true;
+              try {
+                voice.start();
+              } catch {
+                // ignore
+              }
+            }}
+            onTouchEnd={() => {
+              pushToTalkRef.current = false;
+              try {
+                voice.commit();
+                voice.stop();
+              } catch {
+                // ignore
+              }
+            }}
+            aria-label="Hold to talk"
+            title="Hold to talk (or hold Space)"
+            data-testid="desktop-mic-btn"
+            className={[
+              "grid h-12 w-12 shrink-0 place-items-center rounded-full border text-base transition-colors",
+              voice.listening
+                ? "border-red-400/60 bg-red-500/30 text-white"
+                : "border-white/10 bg-white/10 text-white/80 hover:bg-white/20",
+            ].join(" ")}
+          >
+            {voice.listening ? "●" : "🎙"}
+          </button>
+        )}
         <button
           type="submit"
           data-testid="desktop-dream-paint"
