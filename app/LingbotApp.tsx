@@ -323,20 +323,34 @@ function DesktopDefaultScene({
     if (ran.current) return;
     ran.current = true;
     void (async () => {
+      // eslint-disable-next-line no-console
+      console.log("[ss] DesktopDefaultScene START");
       try {
         const seed = Math.floor(Math.random() * 0xffffffff);
+        // eslint-disable-next-line no-console
+        console.log("[ss] DesktopDefaultScene generating seed image");
         const blob = await generateSeedImage({ seed });
+        // eslint-disable-next-line no-console
+        console.log("[ss] DesktopDefaultScene uploading");
         const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
+        // eslint-disable-next-line no-console
+        console.log("[ss] DesktopDefaultScene uploaded", ref?.upload_id ?? ref);
         await setImage({ image: ref });
+        // eslint-disable-next-line no-console
+        console.log("[ss] DesktopDefaultScene setImage done");
         await setPrompt({ prompt: composeScenePrompt({ text: prompt, isFirst: true }) });
+        // eslint-disable-next-line no-console
+        console.log("[ss] DesktopDefaultScene setPrompt done");
         await start();
+        // eslint-disable-next-line no-console
+        console.log("[ss] DesktopDefaultScene start done");
         // Save the default as the first scene of the active session.
         sessions.addScene({ prompt, seed });
         // eslint-disable-next-line no-console
         console.log("[ss] DesktopDefaultScene addScene fired");
       } catch (e: any) {
         // eslint-disable-next-line no-console
-        console.warn("[ss] DesktopDefaultScene failed:", e?.message ?? e);
+        console.warn("[ss] DesktopDefaultScene failed:", e?.message ?? e, e?.stack);
       }
     })();
   }, [enabled, prompt, hasUserScenes, setImage, setPrompt, start, uploadFile, sessions]);
