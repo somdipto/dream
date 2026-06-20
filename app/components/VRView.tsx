@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { LingbotMainVideoView, useLingbot } from "@reactor-models/lingbot";
 import { useVoice } from "../hooks/useVoice";
 
@@ -44,6 +44,11 @@ export function VRView({
   const voice = useVoice();
   const [showExit, setShowExit] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
+  // Unique id for the SVG <filter> this instance declares. With
+  // React's `useId` the id is stable across renders and unique
+  // across instances, so two VRView mounts in the DOM don't shadow
+  // each other's barrel-distortion filter.
+  const filterId = `vr-barrel-${useId()}`;
 
   useEffect(() => {
     if (!voice.supported) return;
@@ -117,10 +122,12 @@ export function VRView({
     >
       {/* Inline SVG filter — barrel distortion pre-warp so the
           Cardboard lenses introduce the right amount of pin-cushion
-          distortion when the user looks through them. */}
+          distortion when the user looks through them. The id is
+          generated per-instance via useId() so two VRView mounts
+          never collide on the global filter namespace. */}
       <svg aria-hidden className="pointer-events-none absolute h-0 w-0">
         <defs>
-          <filter id="vr-barrel" x="-10%" y="-10%" width="120%" height="120%">
+          <filter id={filterId} x="-10%" y="-10%" width="120%" height="120%">
             <feTurbulence
               type="fractalNoise"
               baseFrequency="0.012"
@@ -142,7 +149,8 @@ export function VRView({
 
       {/* Single video, two parallax-shifted clip-path viewports.
           No double subscription — one stream, two "windows" into
-          it. */}
+          it. The `filter` style is set inline so it references this
+          instance's unique filter id (see useId() above). */}
       <div className="flex h-full w-full bg-black">
         <div
           className="vr-lens relative h-full w-1/2 overflow-hidden"
@@ -153,6 +161,7 @@ export function VRView({
             style={{
               width: `${100 + PARALLAX_PCT * 2}%`,
               left: `-${PARALLAX_PCT}%`,
+              filter: `url(#${filterId})`,
             }}
           >
             <LingbotMainVideoView
@@ -170,6 +179,7 @@ export function VRView({
             style={{
               width: `${100 + PARALLAX_PCT * 2}%`,
               left: `-${PARALLAX_PCT}%`,
+              filter: `url(#${filterId})`,
             }}
           >
             <LingbotMainVideoView

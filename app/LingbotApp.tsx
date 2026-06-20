@@ -142,14 +142,28 @@ function DreamSurface() {
   ]);
 
   const handleReset = useCallback(() => {
-    // Order matters: clear voice + reset BEFORE disconnect so the
-    // SDK teardown doesn't race against voice recogniser shutdown.
-    if (platform.isMobile) {
-      voice.stop();
-      voice.reset();
-    }
-    void disconnect();
-    setHasBegun(false);
+    // Order matters: await the voice teardown BEFORE disconnect so
+    // the SDK teardown doesn't race the recogniser's audio handle.
+    // Without the await, a slow Android Chrome can hand a still-
+    // active mic to the next voice.start() and produce a
+    // `NotAllowedError` (audit bug #17).
+    const teardown = async () => {
+      if (platform.isMobile) {
+        try {
+          await voice.stop();
+        } catch {
+          // best-effort
+        }
+        voice.reset();
+      }
+      try {
+        await disconnect();
+      } catch {
+        // best-effort
+      }
+      setHasBegun(false);
+    };
+    void teardown();
   }, [disconnect, voice.stop, voice.reset, platform.isMobile]);
 
   // Auto-retry once on transient disconnect (hackathon wifi is flaky).
@@ -220,14 +234,7 @@ function DreamSurface() {
               >
                 Discard
               </button>
-              <button
-                type="button"
-                onClick={() => sessions.restoreBackup()}
-                className="rounded-full bg-amber-300 px-3 py-1 font-medium text-amber-950 hover:bg-amber-200"
-                data-testid="recovery-restore-btn"
-              >
-                Restore
-              </button>
+              <RestoreButton sessions={sessions} />
             </div>
           </div>
         )}
@@ -581,24 +588,79 @@ function DesktopDefaultScene({
 // the painted world; when idle (no generation running, e.g. on a
 // pre-Begin landing page) the cursor is restored.
 //
+// Inline component for the recovery-banner Restore button. Shows a
+// spinner while parsing the corrupt blob (synchronous parse, can
+// take >100 ms on devices with many large scenes) and disables the
+// button so a frustrated user can't double-tap.
+function RestoreButton({
+  sessions,
+}: {
+  sessions: ReturnType<typeof useSessions>;
+}) {
+  const [restoring, setRestoring] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={restoring}
+      onClick={() => {
+        if (restoring) return;
+        setRestoring(true);
+        // Restore synchronously today, but defer one microtask so
+        // React has a chance to commit the disabled state before the
+        // parse blocks the main thread.
+        queueMicrotask(() => {
+          try {
+            sessions.restoreBackup();
+          } finally {
+            setRestoring(false);
+          }
+        });
+      }}
+      className="flex items-center justify-center gap-2 rounded-full bg-amber-300 px-3 py-1 font-medium text-amber-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+      data-testid="recovery-restore-btn"
+    >
+      {restoring && (
+        <span
+          aria-hidden="true"
+          className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-amber-950/30 border-t-amber-950"
+        />
+      )}
+      {restoring ? "Restoring…" : "Restore"}
+    </button>
+  );
+}
+
 // We use the "none" cursor value on the document body so the cursor
 // also disappears over the video element itself, not just over the
 // top-level UI.
 function CursorEmbed() {
   const { status } = useLingbot();
   const [hide, setHide] = useState(false);
+  // Ref-guarded: only remove the class on cleanup if *we* added it.
+  // Without this, if the component remounts with hide=false while a
+  // previous mount had hide=true, the previous cleanup removes the
+  // class — but the new mount's effect hasn't run yet, so there's a
+  // visible flash where the cursor is hidden but nothing in the
+  // active component wants it hidden.
+  const appliedRef = useRef(false);
   useEffect(() => {
     setHide(status === "ready");
   }, [status]);
   useEffect(() => {
     if (typeof document === "undefined") return;
+    const root = document.documentElement;
     if (hide) {
-      document.documentElement.classList.add("cursor-hidden");
+      root.classList.add("cursor-hidden");
+      appliedRef.current = true;
     } else {
-      document.documentElement.classList.remove("cursor-hidden");
+      root.classList.remove("cursor-hidden");
+      appliedRef.current = false;
     }
     return () => {
-      document.documentElement.classList.remove("cursor-hidden");
+      if (appliedRef.current) {
+        root.classList.remove("cursor-hidden");
+        appliedRef.current = false;
+      }
     };
   }, [hide]);
   return null;

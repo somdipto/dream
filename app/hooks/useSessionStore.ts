@@ -223,7 +223,37 @@ export function useSessionStoreImpl(): UseSessionStore {
   }, []);
 
   const setActive = useCallback((sessionId: string | null) => {
-    setActiveId(sessionId);
+    // Validate that the requested id exists in our sessions list.
+    // Without this, a stale id (e.g. from a URL or a deleted session
+    // referenced in some external state) silently flips activeId to
+    // a known-bad value and the next render shows `activeSession`
+    // as null with no signal to the user. Allow null explicitly —
+    // that's how callers deselect.
+    if (sessionId !== null) {
+      // Read the latest sessions list via a functional setter so we
+      // don't depend on a closure-captured `sessions` value.
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === sessionId)) {
+          // Found — commit the activeId change. (We can't call
+          // setActiveId here because we're inside a setter; do it
+          // after this microtask.)
+          queueMicrotask(() => setActiveId(sessionId));
+        } else {
+          // Stale id — log and no-op so the journal doesn't get
+          // accidentally re-rooted to a non-existent session.
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[dream] setActive: session not found, ignoring:",
+            sessionId,
+          );
+        }
+        // Always return prev unchanged — this setter exists only for
+        // its side effect of validating the id.
+        return prev;
+      });
+      return;
+    }
+    setActiveId(null);
   }, []);
 
   const restoreBackup = useCallback((): boolean => {

@@ -46,7 +46,14 @@ export interface VoiceState {
 
 export interface VoiceControls extends VoiceState {
   start: () => void;
-  stop: () => void;
+  /**
+   * Stop the recogniser. Returns a Promise that resolves once the
+   * recogniser's `onend` has fired (or after a 200ms safety timeout).
+   * Callers that need to chain other teardown — e.g. disconnecting
+   * the Lingbot SDK — should `await voice.stop()` so they don't race
+   * the recogniser's audio handle.
+   */
+  stop: () => Promise<void>;
   /** Manually commit the current interim + buffered text as `final`. */
   commit: () => string | null;
   /** Clear `final` so the next commit starts fresh. */
@@ -214,21 +221,42 @@ export function useVoice(): VoiceControls {
     }
   }, [supported, armSilenceFlush, commitBufferAsFinal]);
 
-  const stop = useCallback(() => {
+  // stop() resolves once the recogniser has actually finished
+  // tearing down. We wait for `onend` (some browsers fire it
+  // asynchronously after abort()) or a 200 ms safety timeout,
+  // whichever first. Callers that need to chain other teardown
+  // after stop — e.g. disconnecting the Lingbot SDK — should
+  // `await voice.stop()` so they don't race the recogniser's
+  // audio handle.
+  const stop = useCallback((): Promise<void> => {
     shouldListenRef.current = false;
     flushSilence();
     const rec = recRef.current;
-    if (rec) {
-      // Null handlers FIRST so a delayed onend (which browsers sometimes
-      // fire after `stop()`) doesn't restart the recogniser via the
-      // auto-restart loop. Audit bug #14/#16.
-      try {
-        rec.onresult = null;
-        rec.onerror = null;
-        rec.onend = null;
-      } catch {
-        // ignore
-      }
+    if (!rec) {
+      setListening(false);
+      return Promise.resolve();
+    }
+    // Null handlers FIRST so a delayed onend (which browsers sometimes
+    // fire after `stop()`) doesn't restart the recogniser via the
+    // auto-restart loop. Audit bug #14/#16.
+    try {
+      rec.onresult = null;
+      rec.onerror = null;
+    } catch {
+      // ignore
+    }
+    // Wrap onend so we can resolve our promise when it fires.
+    const prevOnEnd = rec.onend;
+    return new Promise<void>((resolve) => {
+      const onSettled = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      rec.onend = onSettled;
+      // Safety net: even if `onend` never fires (some Android
+      // Chrome builds can hang the recogniser after abort()),
+      // resolve after 200ms so callers never block forever.
+      const timer = setTimeout(onSettled, 200);
       try {
         // abort() cuts the audio immediately so a mid-utterance stop
         // doesn't lose the user's last phrase to a delayed onresult.
@@ -238,11 +266,18 @@ export function useVoice(): VoiceControls {
           rec.stop();
         }
       } catch {
-        // ponytail: stopping an already-stopped recogniser throws on some browsers.
+        // ponytail: stopping an already-stopped recogniser throws on
+        // some browsers. Treat as already-stopped.
+        onSettled();
       }
-    }
-    recRef.current = null;
-    setListening(false);
+      // If a previous onend was registered (unlikely now that we
+      // nulled it above, but defensive), keep it for any external
+      // listener.
+      void prevOnEnd;
+    }).finally(() => {
+      recRef.current = null;
+      setListening(false);
+    });
   }, [flushSilence]);
 
   const commit = useCallback((): string | null => {
