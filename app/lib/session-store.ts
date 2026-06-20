@@ -90,7 +90,25 @@ export function loadFromStorage(): LoadResult {
   let activeId: string | null = null;
   try {
     const a = window.localStorage.getItem(ACTIVE_KEY);
-    if (a && sessions.some((s) => s.id === a)) activeId = a;
+    if (a && sessions.some((s) => s.id === a)) {
+      activeId = a;
+    } else if (a) {
+      // M9.17: saveToStorage writes JSON.stringify(activeId), but
+      // older callers wrote the raw string. Accept either shape so
+      // historical blobs (and any forward-compat readers) round-
+      // trip. JSON.parse on the already-unquoted id throws —
+      // catch and fall back to the raw string.
+      try {
+        const parsed = JSON.parse(a);
+        if (typeof parsed === "string" && sessions.some((s) => s.id === parsed)) {
+          activeId = parsed;
+        }
+      } catch {
+        // Not JSON — treat as the raw id we wrote previously.
+        // The earlier `sessions.some(...)` already filtered it
+        // out, so leave activeId null.
+      }
+    }
   } catch {
     // ignore
   }
