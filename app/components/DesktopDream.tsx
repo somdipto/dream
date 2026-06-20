@@ -86,46 +86,62 @@ export function DesktopDream() {
       const seed = (opts?.seed ?? hashSeed(text + ":" + sessionNonceRef.current.toString(16))) >>> 0;
       setLastSeed(seed);
 
-      try {
-        if (generating || snapshot?.has_image) {
-          const resetDone = new Promise<void>((resolve) => {
-            resetReadyRef.current = resolve;
+      // Race the paint pipeline against a 30s wall clock. If Reactor's
+      // backend is hanging (e.g. upload slot exhaustion), we don't
+      // want to leave inFlightRef = true forever and block subsequent
+      // paints. The scene is already saved optimistically by the
+      // submit handler, so the worst case is the live preview doesn't
+      // update.
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      const timeoutPromise = new Promise<"timeout">((resolve) => {
+        timeoutId = setTimeout(() => resolve("timeout"), 30000);
+      });
+      const pipeline = (async (): Promise<"ok" | "err"> => {
+        try {
+          if (generating || snapshot?.has_image) {
+            const resetDone = new Promise<void>((resolve) => {
+              resetReadyRef.current = resolve;
+            });
+            await reset();
+            await resetDone;
+          }
+          const blob = await generateSeedImage({ seed });
+          const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
+          const imageReady = new Promise<void>((resolve) => {
+            imageReadyRef.current = resolve;
           });
-          await reset();
-          await resetDone;
+          await setImage({ image: ref });
+          await imageReady;
+          const prompt = composeScenePrompt({ text, isFirst: !snapshot?.has_prompt });
+          const conditionsReady = new Promise<void>((resolve) => {
+            conditionsReadyRef.current = resolve;
+          });
+          await setPrompt({ prompt });
+          await conditionsReady;
+          await start();
+          return "ok";
+        } catch {
+          return "err";
         }
-        const blob = await generateSeedImage({ seed });
-        const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
-        const imageReady = new Promise<void>((resolve) => {
-          imageReadyRef.current = resolve;
-        });
-        await setImage({ image: ref });
-        await imageReady;
-        const prompt = composeScenePrompt({ text, isFirst: !snapshot?.has_prompt });
-        const conditionsReady = new Promise<void>((resolve) => {
-          conditionsReadyRef.current = resolve;
-        });
-        await setPrompt({ prompt });
-        await conditionsReady;
-        await start();
+      })();
+
+      const result = await Promise.race([pipeline, timeoutPromise]);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (result === "ok") {
         setPhase("live");
-      } catch (e: any) {
-        setError(e?.message ?? String(e));
+      } else if (result === "err") {
+        setError("Generation failed");
         if (!generating) setPhase("idle");
-      } finally {
-        inFlightRef.current = false;
-        // Always save the user's prompt to the session — even if the
-        // Reactor backend fails (upload hang, network, quota). The
-        // "memory" requirement says whatever the user does in a
-        // session must persist locally. The seed stays valid for
-        // replay: re-running paint with the same seed regenerates the
-        // exact same anchor.
-        sessions.addScene({ prompt: text, seed });
-        const next = queuedRef.current;
-        queuedRef.current = null;
-        if (next) {
-          setTimeout(() => void paintDream(next), 0);
-        }
+      } else {
+        // timeout
+        setError("Generation is taking longer than expected — saved locally, will retry on next paint");
+        setPhase("idle");
+      }
+      inFlightRef.current = false;
+      const next = queuedRef.current;
+      queuedRef.current = null;
+      if (next) {
+        setTimeout(() => void paintDream(next), 0);
       }
     },
     [
@@ -137,7 +153,6 @@ export function DesktopDream() {
       setPrompt,
       start,
       reset,
-      sessions,
     ],
   );
 
@@ -181,7 +196,15 @@ export function DesktopDream() {
     const t = text.trim();
     if (!t) return;
     setText("");
-    void paintDream(t);
+    // Optimistically save the user's intent immediately. The
+    // "memory" requirement says whatever the user does in a session
+    // is persisted locally — even if Reactor's backend is failing
+    // to produce a preview, the prompt must not be lost. The
+    // paintDream call below will still try to render the scene, but
+    // it's best-effort.
+    const seed = hashSeed(t + ":" + sessionNonceRef.current.toString(16)) >>> 0;
+    sessions.addScene({ prompt: t, seed });
+    void paintDream(t, { seed });
   }
 
   return (

@@ -176,12 +176,9 @@ export function VoiceDream() {
         if (!generating) setPhase("idle");
       } finally {
         inFlightRef.current = false;
-        // Always save the spoken phrase to the active session — even
-        // if Reactor's backend is failing (upload hang, network
-        // drop, etc). The "LiveVocs" requirement: every spoken phrase
-        // is automatically added to the current session screen, so
-        // the user's voice work is never lost.
-        sessions.addScene({ prompt: text, seed });
+        // The session scene is saved by the caller (form submit /
+        // voice.onFinal) BEFORE paintDream runs, so the user's
+        // intent is preserved even if the backend hangs.
         // Drain the queue: if the user spoke again while we were busy,
         // fire the latest queued text now.
         const next = queuedRef.current;
@@ -193,7 +190,7 @@ export function VoiceDream() {
         }
       }
     },
-    [ready, generating, snapshot?.has_image, snapshot?.has_prompt, uploadFile, setImage, setPrompt, start, reset, sessions]
+    [ready, generating, snapshot?.has_image, snapshot?.has_prompt, uploadFile, setImage, setPrompt, start, reset]
   );
 
   // The user's explicit mic intent. M3.5: clicking the mic while
@@ -208,9 +205,14 @@ export function VoiceDream() {
   useEffect(() => {
     if (!ready) return;
     return voice.onFinal((text) => {
+      // Save the spoken phrase to the active session immediately —
+      // this is the "LiveVocs" hookup. Even if Reactor's backend is
+      // failing to render, the user's voice work is preserved.
+      const seed = hashSeed(text + ":" + sessionNonceRef.current.toString(16));
+      sessions.addScene({ prompt: text, seed });
       void paintDream(text);
     });
-  }, [ready, voice, paintDream]);
+  }, [ready, voice, paintDream, sessions]);
 
   // If the user mutes while listening, stop the recogniser. If the
   // browser ends the session (silence cap) while muted, do NOT
@@ -260,6 +262,11 @@ export function VoiceDream() {
     const text = (data.get("text") as string | null)?.trim();
     if (!text) return;
     e.currentTarget.reset();
+    // Save the user's intent immediately (the "LiveVocs" /
+    // "memory" requirement: every spoken phrase — or in this case,
+    // typed phrase on mobile — is added to the current session).
+    const seed = hashSeed(text + ":" + sessionNonceRef.current.toString(16));
+    sessions.addScene({ prompt: text, seed });
     void paintDream(text);
   }
 
