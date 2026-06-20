@@ -133,6 +133,39 @@ function DreamSurface() {
   if (!hasBegun) {
     return (
       <main className="relative grid min-h-screen place-items-center bg-black p-6 text-white">
+        {/* Recovery banner — surfaces if the previous storage blob was
+            unreadable. Gives the user a chance to restore before we
+            silently lose the journal. (Audit bug #30.) */}
+        {sessions.recoveryNotice && (
+          <div
+            role="alert"
+            aria-live="assertive"
+            className="fixed inset-x-3 top-3 z-50 flex justify-center"
+          >
+            <div className="flex max-w-md items-center gap-3 rounded-2xl border border-amber-400/40 bg-amber-500/15 px-4 py-3 text-xs text-amber-100 shadow-2xl backdrop-blur">
+              <span className="flex-1">
+                We couldn't read your saved journal. The last snapshot was
+                preserved — tap Restore to bring it back.
+              </span>
+              <button
+                type="button"
+                onClick={() => sessions.restoreBackup()}
+                className="rounded-full bg-amber-300 px-3 py-1 font-medium text-amber-950 hover:bg-amber-200"
+                data-testid="recovery-restore-btn"
+              >
+                Restore
+              </button>
+              <button
+                type="button"
+                onClick={() => sessions.dismissRecovery()}
+                aria-label="Dismiss recovery notice"
+                className="text-amber-200/80 hover:text-amber-100"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
         <div className="max-w-sm text-center">
           <h1 className="text-2xl font-semibold tracking-tight">
             Speak your dream into the world.

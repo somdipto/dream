@@ -15,6 +15,15 @@ import { useLingbot } from "@reactor-models/lingbot";
 //     up, bottom half → look down). Returns to idle when the mouse is
 //     inside a small dead-zone at center.
 //
+// Mouse sensitivity:
+//   - Default max rotation speed dropped from 25 → 12 deg/frame
+//     (the old value translated to ~1500°/s at 60fps, which felt
+//     like the camera was glued to a fidget spinner).
+//   - User can tune sensitivity in 0.25×–3× steps via the HUD slider.
+//     Preference persists in localStorage.
+//   - Dead zone widened from 12% → 15% so a drifting mouse near the
+//     center doesn't produce micro-rotations.
+//
 // Design notes:
 //   - Lingbot's look axes are *continuous* (`idle | left | right`) with
 //     a configurable `rotation_speed_deg`. We tune speed by mouse
@@ -30,21 +39,60 @@ type Movement = "idle" | "forward" | "back" | "strafe_left" | "strafe_right";
 type LookH = "idle" | "left" | "right";
 type LookV = "idle" | "up" | "down";
 
-const MAX_ROT_SPEED = 25;
-const DEAD_ZONE = 0.12; // 12% of half-viewport → no rotation
-const MAX_ROT_DIST = 0.6; // 60% of half-viewport → max rotation speed
+const MAX_ROT_SPEED = 12;       // deg/frame at full mouse deflection
+const DEAD_ZONE = 0.15;         // 15% of half-viewport → no rotation
+const MAX_ROT_DIST = 0.7;       // 70% of half-viewport → max rotation speed
+const SENSITIVITY_KEY = "dream.mouseSensitivity.v1";
+const SENSITIVITY_DEFAULT = 1.0;
+const SENSITIVITY_MIN = 0.25;
+const SENSITIVITY_MAX = 3.0;
+
+function loadSensitivity(): number {
+  if (typeof window === "undefined") return SENSITIVITY_DEFAULT;
+  try {
+    const raw = window.localStorage.getItem(SENSITIVITY_KEY);
+    if (!raw) return SENSITIVITY_DEFAULT;
+    const v = parseFloat(raw);
+    if (!Number.isFinite(v)) return SENSITIVITY_DEFAULT;
+    return Math.max(SENSITIVITY_MIN, Math.min(SENSITIVITY_MAX, v));
+  } catch {
+    return SENSITIVITY_DEFAULT;
+  }
+}
 
 export function DesktopController({ enabled }: { enabled: boolean }) {
   const { setMovement, setLookHorizontal, setLookVertical, setRotationSpeedDeg, status } = useLingbot();
 
   const keysRef = useRef<Set<string>>(new Set());
   const mouseRef = useRef({ x: 0, y: 0 }); // -1..1, 0=center
+  const sensitivityRef = useRef<number>(SENSITIVITY_DEFAULT);
+  const [sensitivity, setSensitivityState] = useState<number>(SENSITIVITY_DEFAULT);
   const lastSent = useRef<{
     movement: Movement;
     lookH: LookH;
     lookV: LookV;
     rotSpeed: number;
   }>({ movement: "idle", lookH: "idle", lookV: "idle", rotSpeed: 5 });
+
+  // Hydrate the saved sensitivity on mount.
+  useEffect(() => {
+    const v = loadSensitivity();
+    sensitivityRef.current = v;
+    setSensitivityState(v);
+  }, []);
+
+  function setSensitivity(v: number) {
+    const clamped = Math.max(SENSITIVITY_MIN, Math.min(SENSITIVITY_MAX, v));
+    sensitivityRef.current = clamped;
+    setSensitivityState(clamped);
+    try {
+      window.localStorage.setItem(SENSITIVITY_KEY, clamped.toString());
+    } catch {
+      // ignore — privacy mode
+    }
+    // Force a re-tick so the new speed takes effect immediately.
+    tick();
+  }
 
   // --- Keyboard wiring ---
   useEffect(() => {
@@ -148,9 +196,12 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
       lookV = my < 0 ? "up" : "down";
     }
 
-    // 5. Rotation speed scales with mouse distance. Keyboard look uses
-    //    a fixed speed so it feels predictable.
-    let rotSpeed = MAX_ROT_SPEED * 0.3; // ~7.5 deg/frame for keyboard
+    // 5. Rotation speed scales with mouse distance and the user's
+    //    sensitivity multiplier. Keyboard look uses a fixed base speed
+    //    so it feels predictable, but the user can still tune it via
+    //    the slider.
+    const sens = sensitivityRef.current;
+    let rotSpeed = MAX_ROT_SPEED * 0.3 * sens; // ~3.6 deg/frame for keyboard @ 1x
     const mouseDriven =
       !k.has("ArrowLeft") && !k.has("ArrowRight") && !k.has("ArrowUp") && !k.has("ArrowDown");
     if (mouseDriven && (lookH !== "idle" || lookV !== "idle")) {
@@ -158,10 +209,10 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
         Math.min(Math.abs(mx) / MAX_ROT_DIST, 1),
         Math.min(Math.abs(my) / MAX_ROT_DIST, 1),
       );
-      rotSpeed = MAX_ROT_SPEED * Math.max(0.2, dominant);
+      rotSpeed = MAX_ROT_SPEED * Math.max(0.2, dominant) * sens;
     }
 
-    // 5. Send only on change.
+    // 6. Send only on change.
     const prev = lastSent.current;
     if (movement !== prev.movement) {
       void setMovement({ movement });
@@ -175,7 +226,7 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
       void setLookVertical({ look_vertical: lookV });
       prev.lookV = lookV;
     }
-    if (Math.abs(rotSpeed - prev.rotSpeed) > 0.5) {
+    if (Math.abs(rotSpeed - prev.rotSpeed) > 0.3) {
       void setRotationSpeedDeg({ rotation_speed_deg: rotSpeed });
       prev.rotSpeed = rotSpeed;
     }
@@ -196,11 +247,27 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
   }, [status, setMovement, setLookHorizontal, setLookVertical]);
 
   // Show a small HUD on desktop so the user knows the controls exist.
-  // Kept unobtrusive — bottom-right, fades on first key press.
-  return <DesktopControlsHUD enabled={enabled} />;
+  // Kept unobtrusive — bottom-right, fades on first key press. Now
+  // includes a sensitivity slider so the user can dial the speed to
+  // their taste (and we never have to ship a magic-number default).
+  return (
+    <DesktopControlsHUD
+      enabled={enabled}
+      sensitivity={sensitivity}
+      setSensitivity={setSensitivity}
+    />
+  );
 }
 
-function DesktopControlsHUD({ enabled }: { enabled: boolean }) {
+function DesktopControlsHUD({
+  enabled,
+  sensitivity,
+  setSensitivity,
+}: {
+  enabled: boolean;
+  sensitivity: number;
+  setSensitivity: (v: number) => void;
+}) {
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
     if (!enabled) return;
@@ -217,30 +284,62 @@ function DesktopControlsHUD({ enabled }: { enabled: boolean }) {
     };
   }, [enabled]);
 
-  if (!enabled || dismissed) return null;
+  if (!enabled) return null;
   return (
     <div
       role="status"
       aria-live="polite"
-      className="pointer-events-none fixed right-3 top-20 z-20 hidden rounded-lg border border-white/10 bg-black/60 px-3 py-2 text-[10px] text-white/70 shadow-lg backdrop-blur md:block"
+      className="pointer-events-auto fixed right-3 top-20 z-20 hidden w-56 rounded-lg border border-white/10 bg-black/70 px-3 py-2 text-[10px] text-white/80 shadow-lg backdrop-blur md:block"
       style={{ animation: "fadeInSlow 600ms ease-out" }}
     >
-      <p className="font-medium uppercase tracking-wider text-white/50">Controls</p>
-      <p className="mt-1">
-        <kbd className="rounded bg-white/10 px-1.5 py-0.5">W</kbd>{" "}
-        <kbd className="rounded bg-white/10 px-1.5 py-0.5">A</kbd>{" "}
-        <kbd className="rounded bg-white/10 px-1.5 py-0.5">S</kbd>{" "}
-        <kbd className="rounded bg-white/10 px-1.5 py-0.5">D</kbd>{" "}
-        <span className="ml-1 text-white/50">move</span>
-      </p>
-      <p className="mt-1">
-        <kbd className="rounded bg-white/10 px-1.5 py-0.5">↑</kbd>{" "}
-        <kbd className="rounded bg-white/10 px-1.5 py-0.5">↓</kbd>{" "}
-        <kbd className="rounded bg-white/10 px-1.5 py-0.5">←</kbd>{" "}
-        <kbd className="rounded bg-white/10 px-1.5 py-0.5">→</kbd>{" "}
-        <span className="ml-1 text-white/50">look</span>
-      </p>
-      <p className="mt-1 text-white/50">mouse — look</p>
+      {!dismissed && (
+        <>
+          <p className="font-medium uppercase tracking-wider text-white/50">Controls</p>
+          <p className="mt-1">
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5">W</kbd>{" "}
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5">A</kbd>{" "}
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5">S</kbd>{" "}
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5">D</kbd>{" "}
+            <span className="ml-1 text-white/50">move</span>
+          </p>
+          <p className="mt-1">
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5">↑</kbd>{" "}
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5">↓</kbd>{" "}
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5">←</kbd>{" "}
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5">→</kbd>{" "}
+            <span className="ml-1 text-white/50">look</span>
+          </p>
+          <p className="mt-1 text-white/50">mouse — look</p>
+        </>
+      )}
+      <div className={dismissed ? "pt-1" : "mt-2 border-t border-white/10 pt-2"}>
+        <label className="flex items-center justify-between gap-2">
+          <span className="text-white/60">Mouse sensitivity</span>
+          <span className="font-mono text-white/85">{sensitivity.toFixed(2)}×</span>
+        </label>
+        <input
+          type="range"
+          min={SENSITIVITY_MIN}
+          max={SENSITIVITY_MAX}
+          step={0.05}
+          value={sensitivity}
+          onChange={(e) => setSensitivity(parseFloat(e.target.value))}
+          aria-label="Mouse sensitivity"
+          data-testid="mouse-sensitivity-slider"
+          className="mt-1 w-full accent-white"
+        />
+        <div className="mt-1 flex justify-between text-[9px] text-white/40">
+          <span>0.25×</span>
+          <button
+            type="button"
+            onClick={() => setSensitivity(SENSITIVITY_DEFAULT)}
+            className="hover:text-white/70"
+          >
+            reset
+          </button>
+          <span>3×</span>
+        </div>
+      </div>
     </div>
   );
 }

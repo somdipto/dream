@@ -8,7 +8,12 @@ import {
   type Scene,
   type Session,
 } from "../lib/session-types";
-import { loadFromStorage, saveToStorage } from "../lib/session-store";
+import {
+  clearCorruptBackups,
+  loadFromStorage,
+  restoreCorruptBackup,
+  saveToStorage,
+} from "../lib/session-store";
 
 export interface UseSessionStore {
   sessions: Session[];
@@ -19,11 +24,17 @@ export interface UseSessionStore {
   createSession: (opts?: { title?: string; seed?: { prompt: string; seed: number } | null }) => string;
   loadSession: (sessionId: string) => Scene | null;
   deleteSession: (sessionId: string) => void;
+  restoreSession: (session: Session) => void;
+  renameSession: (sessionId: string, title: string) => void;
   setActive: (sessionId: string | null) => void;
   /** Bumped when a save attempt hits quota and prunes. */
   pruneNotice: number;
   /** True once the store has hydrated from localStorage. */
   hydrated: boolean;
+  /** True if the previous storage was unreadable; UI should offer restore. */
+  recoveryNotice: boolean;
+  restoreBackup: () => boolean;
+  dismissRecovery: () => void;
 }
 
 // The actual implementation lives in a single React state. To keep it
@@ -36,11 +47,13 @@ export function useSessionStoreImpl(): UseSessionStore {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [pruneNotice, setPruneNotice] = useState(0);
   const [hydrated, setHydrated] = useState(false);
+  const [recoveryNotice, setRecoveryNotice] = useState(false);
 
   useEffect(() => {
     const r = loadFromStorage();
     setSessions(r.sessions);
     setActiveId(r.activeId);
+    setRecoveryNotice(r.recovered);
     setHydrated(true);
   }, []);
 
@@ -177,8 +190,43 @@ export function useSessionStoreImpl(): UseSessionStore {
     setActiveId((curr) => (curr === sessionId ? null : curr));
   }, []);
 
+  // Restores a previously-deleted session back into the list. Used by
+  // the sidebar's undo-toast. (Audit bug #32.)
+  const restoreSession = useCallback((session: Session) => {
+    setSessions((prev) => {
+      if (prev.some((s) => s.id === session.id)) return prev;
+      return [session, ...prev];
+    });
+  }, []);
+
+  const renameSession = useCallback((sessionId: string, title: string) => {
+    const trimmed = title.trim().slice(0, 120);
+    if (!trimmed) return;
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id === sessionId
+          ? { ...s, title: trimmed, updatedAt: Date.now() }
+          : s,
+      ),
+    );
+  }, []);
+
   const setActive = useCallback((sessionId: string | null) => {
     setActiveId(sessionId);
+  }, []);
+
+  const restoreBackup = useCallback((): boolean => {
+    const r = restoreCorruptBackup();
+    if (!r) return false;
+    setSessions(r.sessions);
+    setRecoveryNotice(false);
+    clearCorruptBackups();
+    return true;
+  }, []);
+
+  const dismissRecovery = useCallback(() => {
+    setRecoveryNotice(false);
+    clearCorruptBackups();
   }, []);
 
   return {
@@ -190,8 +238,13 @@ export function useSessionStoreImpl(): UseSessionStore {
     createSession,
     loadSession,
     deleteSession,
+    restoreSession,
+    renameSession,
     setActive,
     pruneNotice,
     hydrated,
+    recoveryNotice,
+    restoreBackup,
+    dismissRecovery,
   };
 }

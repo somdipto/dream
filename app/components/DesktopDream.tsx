@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useLingbot,
   useLingbotState,
@@ -14,7 +14,14 @@ import { generateSeedImage } from "../lib/seed-image";
 import { composeScenePrompt } from "../lib/scene-composer";
 import { useSessions } from "./SessionProvider";
 import { ChipStrip } from "./ChipStrip";
-import { STYLE_PRESETS, TIME_VARIANTS, findPreset, findVariant } from "../lib/style-presets";
+import {
+  STYLE_PRESETS,
+  TIME_VARIANTS,
+  composePrompt,
+  findPreset,
+  findVariant,
+  hasConflict,
+} from "../lib/style-presets";
 import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
 
 // Desktop equivalent of VoiceDream. Same paint pipeline (reset →
@@ -87,12 +94,27 @@ export function DesktopDream() {
   // Compose the user text + style suffix + time/weather variant into
   // the full prompt the model sees. We keep the raw text in `text`
   // (so the user can edit it) and apply the suffixes only at submit.
+  // Uses composePrompt() from style-presets so conflict detection
+  // (Noir + Sunset, etc.) automatically downgrades the contradictory
+  // token rather than firing both at the model.
   function buildPrompt(raw: string): string {
-    const preset = findPreset(styleId);
-    const variant = findVariant(variantId);
-    const suffix = [preset?.suffix, variant?.suffix].filter(Boolean).join(", ");
-    return suffix ? `${raw}, ${suffix}` : raw;
+    return composePrompt(raw, styleId, variantId);
   }
+
+  // Compute the dimmed-chip lists so the UI can warn the user before
+  // they select a contradicting pair. (Audit bug #36.)
+  const conflictingVariants = useMemo(
+    () => (styleId ? findPreset(styleId)?.conflictsWith ?? [] : []),
+    [styleId],
+  );
+  const conflictingPresets = useMemo(
+    () =>
+      variantId && variantId !== "none"
+        ? findVariant(variantId)?.conflictsWith ?? []
+        : [],
+    [variantId],
+  );
+  const conflictActive = hasConflict(styleId, variantId);
 
   // Clear all three ready-refs at the end of every paint, so a
   // callback from a previous paint can't resolve a new paint's
@@ -224,6 +246,9 @@ export function DesktopDream() {
   // Listen for scene-load events from the sidebar OR from the share-URL
   // consumption. Registered ONCE on mount; reads the latest paintDream
   // from a ref so we don't tear down/rebind on every state update.
+  // Also writes the curated/restored scene into the active journal so
+  // it shows up in the session list — without this, picking a curated
+  // scene paints the world but never saves it (audit bug #31).
   const paintDreamRef = useRef(paintDream);
   paintDreamRef.current = paintDream;
   useEffect(() => {
@@ -233,10 +258,12 @@ export function DesktopDream() {
         | undefined;
       if (!detail?.prompt) return;
       setText(detail.prompt);
+      sessions.addScene({ prompt: detail.prompt, seed: detail.seed });
       void paintDreamRef.current(detail.prompt, { seed: detail.seed });
     }
     window.addEventListener("dream:loadScene", onLoad as EventListener);
     return () => window.removeEventListener("dream:loadScene", onLoad as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // On mount, if the URL contains a shared dream (`?d=...`), auto-paint
@@ -401,13 +428,23 @@ export function DesktopDream() {
           activeId={styleId}
           onSelect={setStyleId}
           size="sm"
+          dimmedIds={variantId && variantId !== "none" ? conflictingPresets : null}
+          dimmedReason="Conflicts with the selected time/weather"
         />
         <ChipStrip
           chips={TIME_VARIANTS.map((v) => ({ id: v.id, label: v.label, emoji: v.emoji }))}
           activeId={variantId}
           onSelect={setVariantId}
           size="sm"
+          dimmedIds={styleId ? conflictingVariants : null}
+          dimmedReason="Conflicts with the selected style"
         />
+        {conflictActive && (
+          <p className="text-[10px] text-amber-300/80">
+            Heads-up — this style + time combo gives the model conflicting
+            cues. The time-of-day will be ignored.
+          </p>
+        )}
       </div>
 
       <form onSubmit={onSubmit} className="flex gap-2" data-testid="desktop-dream-form">

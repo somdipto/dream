@@ -44,6 +44,7 @@ export interface Session {
 export const STORAGE_KEY = "lingbot.sessions.v1";
 export const ACTIVE_KEY = "lingbot.activeSessionId.v1";
 export const SCHEMA_VERSION = 1;
+export const CORRUPT_BACKUP_PREFIX = "lingbot.corruptBackup.v1";
 
 export interface SerializedState {
   version: number;

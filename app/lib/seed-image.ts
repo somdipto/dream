@@ -144,14 +144,18 @@ function drawNoise(
   rng: () => number,
   opacity: number
 ) {
-  const img = ctx.createImageData(w, h);
+  // Read the current pixels (the gradient drawn just before us), add
+  // per-channel noise, write back. The earlier version did this on a
+  // freshly-zeroed buffer and then putImageData replaced the gradient
+  // with monochrome noise — audit bug #9.
+  const img = ctx.getImageData(0, 0, w, h);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
     const n = (rng() - 0.5) * 255 * opacity;
     d[i] = clamp255(d[i] + n);
     d[i + 1] = clamp255(d[i + 1] + n);
     d[i + 2] = clamp255(d[i + 2] + n);
-    d[i + 3] = 255;
+    // Alpha is already 255 from the gradient; leave it alone.
   }
   ctx.putImageData(img, 0, 0);
 }

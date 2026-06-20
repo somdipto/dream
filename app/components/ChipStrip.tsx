@@ -4,6 +4,10 @@
 // row of small emoji + label buttons. The active chip gets a bright
 // white background; inactive chips are subtle. The component is
 // presentational only — the parent owns the state.
+//
+// `dimmedIds` is a set of chip ids that should appear visually
+// disabled (e.g. because pairing them with an active sibling would
+// produce a contradictory prompt — see hasConflict in style-presets).
 
 import type { ReactNode } from "react";
 
@@ -21,13 +25,27 @@ interface ChipStripProps {
   size?: "sm" | "md";
   /** Optional trailing node (e.g. a help icon). */
   trailing?: ReactNode;
+  /** Chips that should appear dimmed (still clickable, but visually de-emphasized). */
+  dimmedIds?: string[] | null;
+  /** Tooltip text shown on hover for a dimmed chip. */
+  dimmedReason?: string;
 }
 
-export function ChipStrip({ chips, activeId, onSelect, size = "md", trailing }: ChipStripProps) {
+export function ChipStrip({
+  chips,
+  activeId,
+  onSelect,
+  size = "md",
+  trailing,
+  dimmedIds,
+  dimmedReason,
+}: ChipStripProps) {
+  const dimmedSet = dimmedIds ? new Set(dimmedIds) : null;
   return (
     <div className="flex flex-wrap items-center gap-1.5" role="radiogroup">
       {chips.map((c) => {
         const active = activeId === c.id;
+        const dimmed = !active && dimmedSet?.has(c.id) === true;
         const sizeCls =
           size === "sm"
             ? "h-7 px-2.5 text-[11px]"
@@ -38,6 +56,8 @@ export function ChipStrip({ chips, activeId, onSelect, size = "md", trailing }: 
             type="button"
             role="radio"
             aria-checked={active}
+            aria-disabled={dimmed}
+            title={dimmed ? dimmedReason : undefined}
             onClick={() => onSelect(active ? null : c.id)}
             className={
               "inline-flex items-center gap-1 rounded-full border transition " +
@@ -45,10 +65,12 @@ export function ChipStrip({ chips, activeId, onSelect, size = "md", trailing }: 
               " " +
               (active
                 ? "border-white/40 bg-white text-black shadow"
-                : "border-white/15 bg-white/5 text-white/85 hover:bg-white/15")
+                : dimmed
+                  ? "border-white/5 bg-white/[0.02] text-white/30 hover:bg-white/5 hover:text-white/60"
+                  : "border-white/15 bg-white/5 text-white/85 hover:bg-white/15")
             }
           >
-            <span aria-hidden>{c.emoji}</span>
+            <span aria-hidden className={dimmed ? "opacity-60" : ""}>{c.emoji}</span>
             <span className="font-medium">{c.label}</span>
           </button>
         );

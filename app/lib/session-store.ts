@@ -1,50 +1,83 @@
 // Pure functions for the localStorage-backed session store. No React.
 // SSR-safe (guards on typeof window).
 //
-// Reads: loadFromStorage() returns { sessions, activeId }. Always
-// succeeds — corrupt JSON is logged and treated as empty.
+// Reads: loadFromStorage() returns { sessions, activeId, recovered }.
+//   On corrupt JSON we back up the raw blob to a "corrupt" key before
+//   resetting, and surface `recovered: true` so the UI can offer
+//   "Restore last journal". (Audit bug #30.)
 // Writes: saveToStorage() returns { ok: true } or { ok: false, reason }.
 //   On QuotaExceededError, prunes the oldest non-active sessions and
 //   retries once. If still over, returns failure.
 
 import {
   ACTIVE_KEY,
+  CORRUPT_BACKUP_PREFIX,
   SCHEMA_VERSION,
   STORAGE_KEY,
   type SerializedState,
   type Session,
 } from "./session-types";
 
+const CORRUPT_BACKUP_KEY = CORRUPT_BACKUP_PREFIX;
+
 export type SaveResult = { ok: true } | { ok: false; reason: "quota" | "unavailable" };
 
 export interface LoadResult {
   sessions: Session[];
   activeId: string | null;
+  /** True if the previous storage blob was corrupt and was preserved
+   *  under CORRUPT_BACKUP_KEY — UI should offer a recovery path. */
+  recovered: boolean;
 }
 
 export function loadFromStorage(): LoadResult {
   if (typeof window === "undefined") {
-    return { sessions: [], activeId: null };
+    return { sessions: [], activeId: null, recovered: false };
   }
   let raw: string | null = null;
   try {
     raw = window.localStorage.getItem(STORAGE_KEY);
   } catch {
     // localStorage blocked (e.g. private mode in some browsers).
-    return { sessions: [], activeId: null };
+    return { sessions: [], activeId: null, recovered: false };
   }
-  if (!raw) return { sessions: [], activeId: null };
+  if (!raw) return { sessions: [], activeId: null, recovered: false };
   let parsed: any;
+  let recovered = false;
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
-    // Corrupt JSON. Self-heal by treating as empty; the next write
-    // overwrites with a clean state.
+    // Corrupt JSON. Preserve the raw blob so the user has a chance
+    // to recover it from devtools, and signal the UI. We don't auto-
+    // overwrite — the next save only fires if the user does something,
+    // and by then we want them to have seen the recovery prompt.
     // eslint-disable-next-line no-console
-    console.warn("[session-store] corrupt JSON in storage; resetting", e);
-    return { sessions: [], activeId: null };
+    console.warn("[session-store] corrupt JSON in storage; backing up", e);
+    try {
+      const ts = Date.now();
+      window.localStorage.setItem(
+        `${CORRUPT_BACKUP_KEY}.${ts}`,
+        raw.slice(0, 100_000),
+      );
+    } catch {
+      // ignore — backup best-effort
+    }
+    return { sessions: [], activeId: null, recovered: true };
   }
   const sessions = extractSessions(parsed);
+  if (sessions.length === 0 && parsed && typeof parsed === "object") {
+    // Storage had *something* but nothing parsed out — also a recovery
+    // signal (schema drift, partial write, etc.).
+    try {
+      window.localStorage.setItem(
+        `${CORRUPT_BACKUP_KEY}.${Date.now()}`,
+        raw.slice(0, 100_000),
+      );
+      recovered = true;
+    } catch {
+      // ignore
+    }
+  }
   let activeId: string | null = null;
   try {
     const a = window.localStorage.getItem(ACTIVE_KEY);
@@ -52,7 +85,7 @@ export function loadFromStorage(): LoadResult {
   } catch {
     // ignore
   }
-  return { sessions, activeId };
+  return { sessions, activeId, recovered };
 }
 
 function extractSessions(parsed: any): Session[] {
@@ -155,6 +188,76 @@ export function saveToStorage(
       // eslint-disable-next-line no-console
       console.warn("[session-store] save still failed after prune:", e2);
       return { ok: false, reason: "quota" };
+    }
+  }
+}
+
+/**
+ * Attempt to restore from the most recent corrupt backup. Returns
+ * the recovered sessions on success. The caller is responsible for
+ * re-hydrating the React state with these (and for writing them back
+ * to the primary STORAGE_KEY via saveToStorage, which will succeed
+ * since we just verified parseability).
+ *
+ * Returns null if no backup is found or if no backup parses cleanly.
+ */
+export function restoreCorruptBackup(): { sessions: Session[] } | null {
+  if (typeof window === "undefined") return null;
+  let keys: string[] = [];
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (k && k.startsWith(CORRUPT_BACKUP_KEY)) keys.push(k);
+    }
+  } catch {
+    return null;
+  }
+  if (keys.length === 0) return null;
+  // Sort newest first (the timestamp suffix).
+  keys.sort((a, b) => {
+    const ta = Number(a.split(".").pop() ?? 0);
+    const tb = Number(b.split(".").pop() ?? 0);
+    return tb - ta;
+  });
+  for (const k of keys) {
+    let raw: string | null = null;
+    try {
+      raw = window.localStorage.getItem(k);
+    } catch {
+      continue;
+    }
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      const sessions = extractSessions(parsed);
+      if (sessions.length > 0) return { sessions };
+    } catch {
+      // try next backup
+    }
+  }
+  return null;
+}
+
+/**
+ * Drop all corrupt backup keys. Call after a successful restore (or
+ * after the user dismisses the recovery prompt) so they don't pile up.
+ */
+export function clearCorruptBackups(): void {
+  if (typeof window === "undefined") return;
+  const toRemove: string[] = [];
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (k && k.startsWith(CORRUPT_BACKUP_KEY)) toRemove.push(k);
+    }
+  } catch {
+    return;
+  }
+  for (const k of toRemove) {
+    try {
+      window.localStorage.removeItem(k);
+    } catch {
+      // ignore
     }
   }
 }

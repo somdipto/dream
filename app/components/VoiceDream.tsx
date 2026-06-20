@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   useLingbot,
   useLingbotState,
@@ -14,7 +14,14 @@ import { generateSeedImage } from "../lib/seed-image";
 import { composeScenePrompt } from "../lib/scene-composer";
 import { useSessions } from "./SessionProvider";
 import { ChipStrip } from "./ChipStrip";
-import { STYLE_PRESETS, TIME_VARIANTS, findPreset, findVariant } from "../lib/style-presets";
+import {
+  STYLE_PRESETS,
+  TIME_VARIANTS,
+  composePrompt,
+  findPreset,
+  findVariant,
+  hasConflict,
+} from "../lib/style-presets";
 import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
 
 // The single hero surface of the app.
@@ -116,11 +123,24 @@ export function VoiceDream() {
   }
 
   function buildPrompt(raw: string): string {
-    const preset = findPreset(styleId);
-    const variant = findVariant(variantId);
-    const suffix = [preset?.suffix, variant?.suffix].filter(Boolean).join(", ");
-    return suffix ? `${raw}, ${suffix}` : raw;
+    // Uses composePrompt() so conflict detection (Noir + Sunset, etc.)
+    // automatically drops the contradictory time-of-day cue instead of
+    // sending both to the model. (Audit bug #36.)
+    return composePrompt(raw, styleId, variantId);
   }
+
+  const conflictingVariants = useMemo(
+    () => (styleId ? findPreset(styleId)?.conflictsWith ?? [] : []),
+    [styleId],
+  );
+  const conflictingPresets = useMemo(
+    () =>
+      variantId && variantId !== "none"
+        ? findVariant(variantId)?.conflictsWith ?? []
+        : [],
+    [variantId],
+  );
+  const conflictActive = hasConflict(styleId, variantId);
 
   /**
    * The core "voice → world" pipeline. Called on every recognized phrase
@@ -279,6 +299,27 @@ export function VoiceDream() {
     }
   }, [ready, muted, voice]);
 
+  // Listen for scene-load events from the sidebar (curated picks,
+  // past scene replay). Saves to the journal so the pick shows up in
+  // the sidebar — the desktop path already does this; mobile was
+  // missing the listener entirely so curated taps silently no-op'd.
+  useEffect(() => {
+    function onLoad(e: Event) {
+      const detail = (e as CustomEvent).detail as
+        | { prompt: string; seed: number }
+        | undefined;
+      if (!detail?.prompt) return;
+      setLastPrompt(detail.prompt);
+      setLastSeed(detail.seed);
+      setText(detail.prompt);
+      sessions.addScene({ prompt: detail.prompt, seed: detail.seed });
+      void paintDreamRef.current(detail.prompt, { seed: detail.seed });
+    }
+    window.addEventListener("dream:loadScene", onLoad as EventListener);
+    return () => window.removeEventListener("dream:loadScene", onLoad as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // On mount, if the URL contains a shared dream (`?d=...`), auto-paint
   // it. This is the entry point for shareable URLs.
   useEffect(() => {
@@ -287,11 +328,13 @@ export function VoiceDream() {
     setLastPrompt(shared.prompt);
     setLastSeed(shared.seed);
     setText(shared.prompt);
+    sessions.addScene({ prompt: shared.prompt, seed: shared.seed });
     const t = setTimeout(() => {
       void paintDreamRef.current(shared.prompt, { seed: shared.seed });
     }, 250);
     clearDreamFromUrl();
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Re-render the most recent prompt with a fresh seed. Same text,
@@ -379,13 +422,23 @@ export function VoiceDream() {
           activeId={styleId}
           onSelect={setStyleId}
           size="sm"
+          dimmedIds={variantId && variantId !== "none" ? conflictingPresets : null}
+          dimmedReason="Conflicts with the selected time/weather"
         />
         <ChipStrip
           chips={TIME_VARIANTS.map((v) => ({ id: v.id, label: v.label, emoji: v.emoji }))}
           activeId={variantId}
           onSelect={setVariantId}
           size="sm"
+          dimmedIds={styleId ? conflictingVariants : null}
+          dimmedReason="Conflicts with the selected style"
         />
+        {conflictActive && (
+          <p className="text-[10px] text-amber-300/80">
+            Heads-up — this style + time combo gives the model conflicting
+            cues. The time-of-day will be ignored.
+          </p>
+        )}
       </div>
 
       <div className="flex items-center justify-center gap-2">

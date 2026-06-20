@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSessions } from "./SessionProvider";
 import type { Session } from "../lib/session-types";
 import { usePlatform } from "../hooks/usePlatform";
@@ -21,6 +21,9 @@ import { CuratedGallery } from "./CuratedGallery";
 //     scene from a non-active session works correctly.
 //   - #25: clicking a session header re-paints its last scene via the
 //     same `dream:loadScene` event the inner scene buttons use.
+//   - #32: delete-session now goes through a 4s undo toast instead of
+//     a single-tap permanent delete.
+//   - #33: sessions can be renamed in place.
 
 export interface SessionSidebarProps {
   open: boolean;
@@ -34,9 +37,41 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
   const store = useSessions();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [tab, setTab] = useState<"sessions" | "discover">("sessions");
+  // Undo-stack for delete-with-undo. Stores the removed session so we
+  // can restore it on Undo tap. Cleared by timeout or by a new delete.
+  const [pendingDelete, setPendingDelete] = useState<{
+    session: Session;
+    timeoutId: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isDesktop = platform.isDesktop;
   const sorted = [...store.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+
+  // Cleanup the undo timer when the sidebar closes.
+  useEffect(() => {
+    return () => {
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    };
+  }, []);
+
+  function deleteWithUndo(session: Session) {
+    // Capture the session at delete time so the "Undo" can put it back
+    // even after another addScene/removeScene has reshuffled the list.
+    setPendingDelete((curr) => {
+      if (curr) clearTimeout(curr.timeoutId);
+      const timeoutId = setTimeout(() => setPendingDelete(null), 4500);
+      return { session, timeoutId };
+    });
+    store.deleteSession(session.id);
+  }
+
+  function undoDelete() {
+    if (!pendingDelete) return;
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    store.restoreSession(pendingDelete.session);
+    setPendingDelete(null);
+  }
 
   return (
     <>
@@ -61,12 +96,20 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
               ].join(" "),
         ].join(" ")}
         aria-hidden={!open}
+        // `inert` keeps Tab focus out of the hidden sidebar on desktop.
+        // Polyfilled by React 19, but we still set aria-hidden above.
+        // (Audit bug #34.)
+        {...({ inert: !open } as { inert?: boolean })}
       >
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-          <div className="flex gap-2">
+          <div className="flex gap-2" role="tablist" aria-label="Journal tabs">
             <button
               type="button"
+              role="tab"
+              aria-selected={tab === "sessions"}
+              aria-pressed={tab === "sessions"}
               onClick={() => setTab("sessions")}
+              data-testid="tab-sessions"
               className={[
                 "rounded-full px-3 py-1 text-xs font-medium transition",
                 tab === "sessions"
@@ -74,11 +117,19 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
                   : "border border-white/15 bg-white/5 text-white/80 hover:bg-white/10",
               ].join(" ")}
             >
-              Sessions
+              Sessions {store.sessions.length > 0 && (
+                <span className="ml-1 text-[10px] text-white/50">
+                  {store.sessions.length}
+                </span>
+              )}
             </button>
             <button
               type="button"
+              role="tab"
+              aria-selected={tab === "discover"}
+              aria-pressed={tab === "discover"}
               onClick={() => setTab("discover")}
+              data-testid="tab-discover"
               className={[
                 "rounded-full px-3 py-1 text-xs font-medium transition",
                 tab === "discover"
@@ -92,7 +143,7 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label="Close sidebar"
             className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-xs text-white/80 hover:bg-white/10"
           >
             ×
@@ -110,9 +161,14 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
         ) : (
           <div className="overflow-y-auto px-2 py-2" style={{ maxHeight: "calc(100vh - 64px)" }}>
             {sorted.length === 0 ? (
-              <p className="px-3 py-8 text-center text-sm text-white/50">
-                No saved dreams yet. Speak a scene and it will save here automatically.
-              </p>
+              <div className="px-3 py-8 text-center">
+                <p className="text-sm text-white/50">
+                  No saved dreams yet.
+                </p>
+                <p className="mt-1 text-xs text-white/40">
+                  Paint or speak a scene and it will save here automatically.
+                </p>
+              </div>
             ) : (
               sorted.map((s) => (
                 <SessionCard
@@ -129,7 +185,8 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
                     if (last) onSelectScene?.(s.id, last.id);
                     onClose();
                   }}
-                  onDelete={() => store.deleteSession(s.id)}
+                  onDelete={() => deleteWithUndo(s)}
+                  onRename={(title) => store.renameSession(s.id, title)}
                   onRemoveScene={(sceneId) => store.removeScene(sceneId, s.id)}
                   onSelectScene={(sceneId) => {
                     onSelectScene?.(s.id, sceneId);
@@ -140,8 +197,38 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
           </div>
         )}
       </aside>
+
+      {/* Undo toast — anchored to the bottom-center so it doesn't sit
+          over the Dream app's controls. */}
+      {pendingDelete && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-4"
+          data-testid="delete-undo-toast"
+        >
+          <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/15 bg-black/90 px-4 py-2 text-xs text-white shadow-2xl backdrop-blur">
+            <span className="text-white/85">
+              Deleted "{truncate(pendingDelete.session.title, 28)}"
+            </span>
+            <button
+              type="button"
+              onClick={undoDelete}
+              className="rounded-full bg-white/15 px-3 py-1 font-medium text-white hover:bg-white/25"
+              data-testid="delete-undo-btn"
+            >
+              Undo
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
 }
 
 function SessionCard({
@@ -151,6 +238,7 @@ function SessionCard({
   onToggle,
   onLoad,
   onDelete,
+  onRename,
   onRemoveScene,
   onSelectScene,
 }: {
@@ -160,9 +248,26 @@ function SessionCard({
   onToggle: () => void;
   onLoad: () => void;
   onDelete: () => void;
+  onRename: (title: string) => void;
   onRemoveScene: (sceneId: string) => void;
   onSelectScene: (sceneId: string) => void;
 }) {
+  const [renaming, setRenaming] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(session.title);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (renaming) {
+      setDraftTitle(session.title);
+      requestAnimationFrame(() => inputRef.current?.select());
+    }
+  }, [renaming, session.title]);
+
+  function commitRename() {
+    const next = draftTitle.trim();
+    if (next && next !== session.title) onRename(next);
+    setRenaming(false);
+  }
+
   return (
     <div
       className={[
@@ -171,17 +276,43 @@ function SessionCard({
       ].join(" ")}
     >
       <div className="flex items-start gap-2 p-3">
+        {renaming ? (
+          <input
+            ref={inputRef}
+            value={draftTitle}
+            onChange={(e) => setDraftTitle(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") setRenaming(false);
+            }}
+            maxLength={120}
+            aria-label="Rename session"
+            data-testid="session-rename-input"
+            className="min-h-[44px] flex-1 rounded-md border border-white/30 bg-black/60 px-2 py-1 text-sm text-white focus:outline-none"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={onLoad}
+            className="min-h-[44px] flex-1 text-left"
+          >
+            <p className="line-clamp-2 text-sm font-medium leading-snug">
+              {session.title}
+            </p>
+            <p className="mt-1 text-[10px] uppercase tracking-wider text-white/50">
+              {session.scenes.length} scene{session.scenes.length === 1 ? "" : "s"} · {timeAgo(session.updatedAt)}
+            </p>
+          </button>
+        )}
         <button
           type="button"
-          onClick={onLoad}
-          className="min-h-[44px] flex-1 text-left"
+          onClick={() => setRenaming((r) => !r)}
+          aria-label={renaming ? "Cancel rename" : "Rename session"}
+          title="Rename"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs hover:bg-white/10"
         >
-          <p className="line-clamp-2 text-sm font-medium leading-snug">
-            {session.title}
-          </p>
-          <p className="mt-1 text-[10px] uppercase tracking-wider text-white/50">
-            {session.scenes.length} scene{session.scenes.length === 1 ? "" : "s"} · {timeAgo(session.updatedAt)}
-          </p>
+          ✎
         </button>
         <button
           type="button"
@@ -195,13 +326,15 @@ function SessionCard({
           type="button"
           onClick={onDelete}
           aria-label="Delete session"
+          title="Delete (undoable)"
+          data-testid="session-delete-btn"
           className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs text-white/60 hover:bg-red-500/30 hover:text-white"
         >
           ×
         </button>
       </div>
       {isActive && (
-        <p className="-mt-2 px-3 pb-2 text-[10px] uppercase tracking-widest text-emerald-300">
+        <p className="-mt-2 px-3 pb-2 text-[10px] uppercase tracking-widest text-emerald-300" aria-label="Currently active session">
           ● Active
         </p>
       )}
