@@ -95,42 +95,49 @@ export function useSessionStoreImpl(): UseSessionStore {
       const trimmed = input.prompt.trim();
       if (!trimmed) return null;
       const seed = input.seed >>> 0;
-      // Dedupe: if the active session already has a scene with the
-      // same prompt + same seed within the last 3 seconds, skip the
-      // add. This handles the double-fire pattern where voice.onFinal
-      // AND the form's onSubmit both try to add the same prompt
-      // back-to-back (audit bug #7), AND it tolerates intentional
-      // re-rolls (different seed).
-      //
-      // Read from `sessionsRef` (not closure-captured `sessions`) so
-      // two addScene calls in the same render both see the latest
-      // list. Without this, call A inserts a scene, call B's
-      // closure still has the pre-A list, and B's dup check fails
-      // to see A's scene — letting a duplicate through.
       const now = Date.now();
-      const live = sessionsRef.current;
-      const dup = live.find((s) => s.id === activeId)?.scenes.find(
-        (sc) => sc.prompt === trimmed && sc.seed === seed && now - sc.timestamp < 3000,
-      );
-      if (dup) return null;
       const scene: Scene = {
         id: newSceneId(),
         prompt: trimmed,
         seed,
-        timestamp: Date.now(),
+        timestamp: now,
       };
+      // QA2: dedupe runs INSIDE the setSessions updater so two
+      // near-simultaneous calls see each other's writes via `prev`,
+      // not `sessionsRef.current` (which is updated post-commit).
+      // The earlier M9.9 fix moved the read to `sessionsRef` to
+      // avoid stale closures, but that ref still lags by one commit
+      // — two calls within the same JS tick both read the pre-A
+      // list. Moving the dedupe into the updater makes it the
+      // authoritative single-threaded check.
+      let added = false;
       setSessions((prev) => {
-        if (activeId === null || !prev.some((s) => s.id === activeId)) {
+        const target = prev.find((s) => s.id === activeId);
+        // Dedupe against the active session's last scene within 3s.
+        if (target) {
+          const last = target.scenes[target.scenes.length - 1];
+          if (
+            last &&
+            last.prompt === scene.prompt &&
+            last.seed === scene.seed &&
+            now - last.timestamp < 3000
+          ) {
+            return prev;
+          }
+        }
+        if (!target) {
           const newS: Session = {
             id: newSessionId(),
             title: deriveTitle([scene]),
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            createdAt: now,
+            updatedAt: now,
             scenes: [scene],
           };
           setActiveId(newS.id);
+          added = true;
           return [newS, ...prev];
         }
+        added = true;
         return prev.map((s) => {
           if (s.id !== activeId) return s;
           const scenes = [...s.scenes, scene];
@@ -138,11 +145,11 @@ export function useSessionStoreImpl(): UseSessionStore {
             ...s,
             scenes,
             title: s.title || deriveTitle(scenes),
-            updatedAt: Date.now(),
+            updatedAt: now,
           };
         });
       });
-      return scene;
+      return added ? scene : null;
     },
     [activeId],
   );
@@ -151,19 +158,23 @@ export function useSessionStoreImpl(): UseSessionStore {
     (sceneId: string, sessionId?: string) => {
       const targetId = sessionId ?? activeId;
       if (!targetId) return;
+      // QA2: previously this filter stripped the entire session
+      // when its last scene was removed. The user clicked "delete
+      // scene" and their whole session vanished. Now the session
+      // survives with an empty scenes list; the active pointer
+      // stays where it was. The chip in the topbar still shows
+      // the session title (so the user knows it's not a bug).
       setSessions((prev) =>
-        prev
-          .map((s) => {
-            if (s.id !== targetId) return s;
-            const scenes = s.scenes.filter((sc) => sc.id !== sceneId);
-            return {
-              ...s,
-              scenes,
-              title: deriveTitle(scenes) || s.title,
-              updatedAt: Date.now(),
-            };
-          })
-          .filter((s) => s.scenes.length > 0),
+        prev.map((s) => {
+          if (s.id !== targetId) return s;
+          const scenes = s.scenes.filter((sc) => sc.id !== sceneId);
+          return {
+            ...s,
+            scenes,
+            title: deriveTitle(scenes) || s.title,
+            updatedAt: Date.now(),
+          };
+        }),
       );
     },
     [activeId],
@@ -206,13 +217,22 @@ export function useSessionStoreImpl(): UseSessionStore {
   }, []);
 
   const deleteSession = useCallback((sessionId: string) => {
-    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-    setActiveId((curr) => {
-      if (curr !== sessionId) return curr;
-      // If we deleted the active session, fall back to the most-recent
-      // remaining session so the user's next paint doesn't silently
-      // land in a brand-new session. (Audit bug #98.)
-      return null;
+    setSessions((prev) => {
+      const remaining = prev.filter((s) => s.id !== sessionId);
+      setActiveId((curr) => {
+        if (curr !== sessionId) return curr;
+        // QA2: deleted the active session — fall back to the
+        // most-recently-updated remaining session. Previously
+        // this returned null, leaving the user with no active
+        // pointer and the next paint auto-creating a brand-new
+        // session. (Audit bug #19.)
+        if (remaining.length === 0) return null;
+        const mostRecent = [...remaining].sort(
+          (a, b) => b.updatedAt - a.updatedAt,
+        )[0];
+        return mostRecent.id;
+      });
+      return remaining;
     });
   }, []);
 
