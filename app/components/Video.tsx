@@ -83,15 +83,25 @@ export function Video() {
     setAuroraOpacity(1);
   }, [status, snapshot?.has_image, snapshot?.started]);
 
-  // Re-tick the aurora opacity over time so it tween's from full to
-  // safety-net-low at the end of the grace window.
+  // QA2: replaced the 250ms re-tick with a one-shot setTimeout
+  // scheduled for the moment the grace window ends. The old
+  // code called setState every 250ms while playing, re-rendering
+  // the entire Video subtree 4×/sec for the lifetime of the
+  // connection. With the new code, aurora opacity is computed
+  // from the snapshot state and only re-renders when the
+  // grace window actually ends OR when darkFrames / phase flips.
   const [now, setNow] = useState<number>(Date.now());
   useEffect(() => {
     if (phase !== "playing") return;
-    const tick = () => setNow(Date.now());
-    const handle = window.setInterval(tick, 250);
-    return () => window.clearInterval(handle);
-  }, [phase]);
+    const remaining = paintGraceUntil - Date.now();
+    if (remaining <= 0) {
+      // Already past grace — flip once and done.
+      setNow(Date.now());
+      return;
+    }
+    const handle = window.setTimeout(() => setNow(Date.now()), remaining + 50);
+    return () => window.clearTimeout(handle);
+  }, [phase, paintGraceUntil]);
 
   useEffect(() => {
     if (phase !== "playing") {

@@ -111,6 +111,10 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
 
     function onDown(e: KeyboardEvent) {
       if (!isMovementKey(e.key)) return;
+      // QA2: skip if any modifier is held — Ctrl+W / Cmd+Tab /
+      // Alt+ArrowLeft are browser shortcuts, not movement.
+      // Without this guard we steal the user's browser navigation.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       // Don't capture if user is typing in the text input.
       const tag = (e.target as HTMLElement | null)?.tagName ?? "";
       if (tag === "INPUT" || tag === "TEXTAREA") return;
@@ -120,6 +124,7 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
     }
     function onUp(e: KeyboardEvent) {
       if (!isMovementKey(e.key)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       keysRef.current.delete(e.key);
       tick();
     }

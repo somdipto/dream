@@ -308,6 +308,90 @@ function BlackScreenMemoryChip() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// QA2: NewSessionConfirmModal — replaces window.confirm on the
+// "+ New session" button. In-app modal that respects the design
+// language, traps focus, dismisses with Esc, and looks the same
+// on iOS Safari as it does on Chrome.
+//
+// Props are the existing session's title + scene count so the
+// user can confirm they want to start a new journal entry
+// while the existing one is preserved.
+// ---------------------------------------------------------------------------
+function NewSessionConfirmModal({
+  title,
+  sceneCount,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  sceneCount: number;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    confirmRef.current?.focus();
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="new-session-confirm-title"
+      data-testid="new-session-confirm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur"
+      onClick={(e) => {
+        // Click outside the dialog → cancel.
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0a0a14]/95 p-5 text-white shadow-2xl">
+        <h2
+          id="new-session-confirm-title"
+          className="text-base font-semibold text-white"
+        >
+          Start a new session?
+        </h2>
+        <p className="mt-2 text-sm text-white/70">
+          Your current session{" "}
+          <span className="text-white">“{title}”</span> is saved with{" "}
+          <span className="text-white">
+            {sceneCount} scene{sceneCount === 1 ? "" : "s"}
+          </span>
+          . The next paint will go into a fresh journal entry.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="min-h-[40px] rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
+            data-testid="new-session-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            ref={confirmRef}
+            type="button"
+            onClick={onConfirm}
+            className="min-h-[40px] rounded-full border border-emerald-400/40 bg-emerald-500/30 px-4 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-500/40"
+            data-testid="new-session-confirm-btn"
+          >
+            New session
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // A surface that picks its controls by platform:
 //   - desktop  → keyboard + mouse + text input. Default scene paints
 //                itself on connect so the screen is never black.
@@ -323,6 +407,15 @@ function DreamSurface() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [vrMode, setVrMode] = useState(false);
   const [pruneToast, setPruneToast] = useState<string | null>(null);
+  // QA2: replace window.confirm with a custom in-app modal.
+  // Mobile Safari's native confirm blocks the JS thread, can be
+  // dismissed by tapping outside the dialog, and breaks the
+  // app's visual flow. The custom modal matches the design
+  // language and is keyboard / focus-trap friendly.
+  const [newSessionConfirm, setNewSessionConfirm] = useState<{
+    title: string;
+    sceneCount: number;
+  } | null>(null);
 
   // Show a non-blocking toast when localStorage is full and we prune.
   // Deduped: ignore further increments while a toast is already
@@ -660,11 +753,16 @@ function DreamSurface() {
               // sessions silently. A short confirm prompt catches
               // accidental taps (especially on mobile where the
               // button is in the top-right reach).
-              const hasScenes =
-                (sessions.activeSession?.scenes.length ?? 0) > 0;
-              if (hasScenes && !window.confirm(
-                `Start a new session? Your current session (“${sessions.activeSession?.title}”) is saved with ${sessions.activeSession?.scenes.length} scene${sessions.activeSession?.scenes.length === 1 ? "" : "s"}.`,
-              )) {
+              // QA2: replaced window.confirm with an in-app modal —
+              // mobile Safari's native confirm is hostile (blocks
+              // the thread, breaks the design language, can be
+              // dismissed by tapping outside).
+              const sceneCount = sessions.activeSession?.scenes.length ?? 0;
+              if (sceneCount > 0) {
+                setNewSessionConfirm({
+                  title: sessions.activeSession?.title ?? "Untitled session",
+                  sceneCount,
+                });
                 return;
               }
               sessions.createSession();
@@ -877,6 +975,21 @@ function DreamSurface() {
         <div className="pointer-events-none fixed left-1/2 top-20 z-50 -translate-x-1/2 rounded-full border border-amber-400/40 bg-amber-500/20 px-4 py-1.5 text-xs text-amber-100 shadow-lg backdrop-blur">
           {pruneToast}
         </div>
+      )}
+
+      {/* QA2: New-session confirm modal (replaces window.confirm).
+          Rendered above all other UI; Esc and click-outside both
+          dismiss without creating a new session. */}
+      {newSessionConfirm && (
+        <NewSessionConfirmModal
+          title={newSessionConfirm.title}
+          sceneCount={newSessionConfirm.sceneCount}
+          onConfirm={() => {
+            sessions.createSession();
+            setNewSessionConfirm(null);
+          }}
+          onCancel={() => setNewSessionConfirm(null)}
+        />
       )}
 
       {/* VR mode — fullscreen overlay. Renders two side-by-side
