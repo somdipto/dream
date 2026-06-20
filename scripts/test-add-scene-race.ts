@@ -1,5 +1,6 @@
 // QA2: verify the addScene dedupe-race fix.
 
+(() => {
 let pass = 0;
 let fail = 0;
 function t(name: string, cond: boolean) {
@@ -75,3 +76,4 @@ t("existing empty session receives scene", s[0].scenes.length === 1);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
+})();

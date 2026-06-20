@@ -277,16 +277,19 @@ export function VoiceDream() {
 
       const result = await Promise.race([pipeline, timeoutPromise]);
       if (timeoutId) clearTimeout(timeoutId);
+      // QA4: emit dream:paintDone on ALL outcomes (success,
+      // failure, timeout) so the StatusBadge can show "failed"
+      // in red. Previously only success emitted; failure left
+      // the badge stuck on the last successful duration.
+      const paintMs = Date.now() - paintStart;
       if (result === "ok") {
         setPhase("live");
         setError(null);
-        // QA3: surface the paint duration so the StatusBadge
-        // can show "Last paint: 4.2s" — a healthy-paint signal
-        // the user can read at a glance.
-        dreamBus.emit("dream:paintDone", { ms: Date.now() - paintStart });
+        dreamBus.emit("dream:paintDone", { ms: paintMs, ok: true });
       } else if (result === "err") {
         setError("Generation failed — your prompt is saved, try again in a moment");
         if (!generating) setPhase("idle");
+        dreamBus.emit("dream:paintDone", { ms: paintMs, ok: false });
       } else {
         setError("Reactor is slow — your prompt is saved. The world may still be painting in the background.");
         recordBlackScreen({
@@ -298,6 +301,7 @@ export function VoiceDream() {
           note: "pipeline Promise.race hit 8s timeout",
         });
         if (!generating) setPhase("idle");
+        dreamBus.emit("dream:paintDone", { ms: paintMs, ok: false });
       }
       inFlightRef.current = false;
       // Consume the pose lock — only affects the next paint.
@@ -613,6 +617,27 @@ export function VoiceDream() {
           >
             <MicIcon active={voice.listening} muted={muted} />
           </button>
+          {/* QA4: live audio-level meter. Renders a small
+              bar under the mic that grows with the user's
+              volume. Gives an at-a-glance "is my voice being
+              captured?" signal — without it, a user muting
+              themselves or speaking too quietly can't tell. */}
+          {voice.listening && !muted && (
+            <div
+              role="meter"
+              aria-label="Microphone level"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(voice.level * 100)}
+              data-testid="mic-level"
+              className="h-1 w-16 overflow-hidden rounded-full bg-white/10"
+            >
+              <div
+                className="h-full rounded-full bg-emerald-400/80 transition-[width] duration-75"
+                style={{ width: `${Math.round(voice.level * 100)}%` }}
+              />
+            </div>
+          )}
           <p className="text-[10px] uppercase tracking-wider text-white/50" aria-live="polite">
             {muted
               ? "Muted"

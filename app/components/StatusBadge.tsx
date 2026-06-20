@@ -17,6 +17,11 @@ import { dreamBus } from "../lib/event-bus";
 // The timer is reset on every successful paint via the
 // `dream:paintDone` event (emitted by VoiceDream / DesktopDream
 // when a paint completes).
+//
+// QA4: when the most recent paint FAILED, the duration is shown
+// in red so the user can tell "model is fine but my last prompt
+// was bad" (green dot, normal duration) from "model is choking"
+// (green dot, stale red duration, possibly still climbing).
 const TONE: Record<string, { dot: string; label: string; ring: string }> = {
   disconnected: { dot: "bg-zinc-500", label: "Disconnected", ring: "border-white/10" },
   connecting: { dot: "bg-amber-400 animate-pulse", label: "Connecting…", ring: "border-amber-400/30" },
@@ -27,10 +32,10 @@ const TONE: Record<string, { dot: string; label: string; ring: string }> = {
 export function StatusBadge() {
   const { status, lastError } = useLingbot();
   const tone = TONE[status] ?? TONE.disconnected;
-  const [lastPaintMs, setLastPaintMs] = useState<number | null>(null);
+  const [lastPaint, setLastPaint] = useState<{ ms: number; ok: boolean } | null>(null);
   useEffect(() => {
-    return dreamBus.on("dream:paintDone", (e: { ms: number }) => {
-      setLastPaintMs(e.ms);
+    return dreamBus.on("dream:paintDone", (e) => {
+      setLastPaint({ ms: e.ms, ok: e.ok });
     });
   }, []);
   return (
@@ -43,13 +48,17 @@ export function StatusBadge() {
       <div className="flex items-center gap-2">
         <span className={`h-2 w-2 rounded-full ${tone.dot}`} />
         <span className="text-xs font-medium text-white/90">{tone.label}</span>
-        {lastPaintMs !== null && status === "ready" && (
+        {lastPaint !== null && status === "ready" && (
           <span
-            className="text-[10px] text-white/55"
+            className={`text-[10px] ${lastPaint.ok ? "text-white/55" : "text-red-300"}`}
             data-testid="last-paint-ms"
-            title="Time to render the most recent scene"
+            title={
+              lastPaint.ok
+                ? "Time to render the most recent scene"
+                : "Most recent paint failed"
+            }
           >
-            · {(lastPaintMs / 1000).toFixed(1)}s
+            · {(lastPaint.ms / 1000).toFixed(1)}s
           </span>
         )}
       </div>

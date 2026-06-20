@@ -58,15 +58,18 @@ export const metadata: Metadata = {
   },
 };
 
-// ponytail: viewport-fit=cover is required for env(safe-area-inset-*) to
+// QA4: viewport-fit=cover is required for env(safe-area-inset-*) to
 // resolve on iPhone notch / Dynamic Island. themeColor is what paints
-// the browser chrome to match the app background.
+// the browser chrome to match the app background. Updated to
+// #0a0a14 so the URL bar matches the warmer page background
+// (audit found a visible seam on iPhone notch load where chrome
+// was #000 and page was #0a0a14). maximumScale removed because
+// it breaks pinch-to-zoom — a WCAG 2.1 SC 1.4.4 regression.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
   viewportFit: "cover",
-  themeColor: "#000000",
+  themeColor: "#0a0a14",
 };
 
 export default function RootLayout({

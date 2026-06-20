@@ -42,6 +42,13 @@ export interface VoiceState {
   final: string | null;
   /** Permission or recognition error message, if any. */
   error: string | null;
+  /**
+   * QA4: live mic level in [0, 1]. Updated at ~20 fps while the
+   * mic is open. 0 when the mic is closed or unsupported. UI
+   * components draw a level meter from this so the user knows
+   * their voice is actually being captured.
+   */
+  level: number;
 }
 
 export interface VoiceControls extends VoiceState {
@@ -82,12 +89,23 @@ export function useVoice(): VoiceControls {
   const [interim, setInterim] = useState("");
   const [final, setFinal] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // QA4: live mic level. Updated ~20 times/sec while the
+  // mic is open. 0 when the mic is closed or unsupported.
+  const [level, setLevel] = useState(0);
 
   const recRef = useRef<any | null>(null);
   const shouldListenRef = useRef(false);
   const bufferRef = useRef("");
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finalListenersRef = useRef<Set<(text: string) => void>>(new Set());
+  // QA4: refs to the AnalyserNode + RAF + mic stream so we
+  // can tear them down in stop() / cleanup. The stream
+  // handle is the critical one to release — without it the
+  // mic stays open after a hot reload.
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const levelRafRef = useRef<number | null>(null);
 
   const flushSilence = useCallback(() => {
     if (silenceTimerRef.current) {
@@ -118,6 +136,77 @@ export function useVoice(): VoiceControls {
       commitBufferAsFinal();
     }, SILENCE_MS);
   }, [flushSilence, commitBufferAsFinal]);
+
+  // QA4: start the mic level meter. Asks for a fresh
+  // getUserMedia stream (independent of SpeechRecognition,
+  // which owns its own audio) and pumps an AnalyserNode via
+  // requestAnimationFrame. Any failure (denied permission,
+  // insecure context) is swallowed — the level meter is
+  // non-critical.
+  const startLevelMeter = useCallback(async () => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
+    if (streamRef.current) return; // already running
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      streamRef.current = stream;
+      const Ctor: typeof AudioContext =
+        (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!Ctor) return;
+      const ctx = new Ctor();
+      audioContextRef.current = ctx;
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      analyserRef.current = analyser;
+      const buf = new Uint8Array(analyser.fftSize);
+      let raf = 0;
+      const tick = () => {
+        if (!analyserRef.current) return;
+        analyserRef.current.getByteTimeDomainData(buf);
+        // RMS over the time-domain buffer (centered at 128).
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const v = (buf[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / buf.length);
+        // Map RMS to a 0..1 scale, biased so quiet speech is
+        // visible but loud speech tops out at 1.0.
+        const norm = Math.min(1, rms * 4);
+        setLevel(norm);
+        raf = requestAnimationFrame(tick);
+        levelRafRef.current = raf;
+      };
+      raf = requestAnimationFrame(tick);
+    } catch {
+      // No-op: level meter is non-critical. The user still
+      // gets the speech-to-text pipeline.
+    }
+  }, []);
+
+  // QA4: stop the level meter and release the mic. Idempotent.
+  const stopLevelMeter = useCallback(() => {
+    if (levelRafRef.current != null) {
+      cancelAnimationFrame(levelRafRef.current);
+      levelRafRef.current = null;
+    }
+    if (streamRef.current) {
+      for (const track of streamRef.current.getTracks()) track.stop();
+      streamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      try { audioContextRef.current.close(); } catch { /* noop */ }
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+    setLevel(0);
+  }, []);
 
   const start = useCallback(() => {
     if (!supported) {
@@ -214,12 +303,16 @@ export function useVoice(): VoiceControls {
     try {
       rec.start();
       setListening(true);
+      // QA4: start the audio-level meter alongside the
+      // recogniser. The meter is best-effort — it never
+      // blocks the speech pipeline.
+      void startLevelMeter();
     } catch (e: any) {
       setError(e?.message ?? String(e));
       shouldListenRef.current = false;
       setListening(false);
     }
-  }, [supported, armSilenceFlush, commitBufferAsFinal]);
+  }, [supported, armSilenceFlush, commitBufferAsFinal, startLevelMeter]);
 
   // stop() resolves once the recogniser has actually finished
   // tearing down. We wait for `onend` (some browsers fire it
@@ -277,8 +370,12 @@ export function useVoice(): VoiceControls {
     }).finally(() => {
       recRef.current = null;
       setListening(false);
+      // QA4: also tear down the audio-level meter. The mic
+      // stream is the important thing to release here — without
+      // it the OS mic indicator stays lit after a stop.
+      stopLevelMeter();
     });
-  }, [flushSilence]);
+  }, [flushSilence, stopLevelMeter]);
 
   const commit = useCallback((): string | null => {
     flushSilence();
@@ -325,6 +422,7 @@ export function useVoice(): VoiceControls {
     interim,
     final,
     error,
+    level,
     start,
     stop,
     commit,

@@ -75,7 +75,16 @@ export function useMotion(
 
   const requestPermission = useCallback(async (): Promise<"granted" | "denied" | "unsupported"> => {
     const DOE = (window as any).DeviceOrientationEvent;
-    if (typeof DOE === "undefined") return "unsupported";
+    // QA4: set the permission state synchronously so the
+    // UI reflects reality even when the caller doesn't read
+    // the return value. Previously the unsupported branch
+    // returned without ever updating state, so the
+    // dependent effects in this hook ran on stale
+    // permission === "default".
+    if (typeof DOE === "undefined") {
+      setPermission("unsupported");
+      return "unsupported";
+    }
     if (typeof DOE.requestPermission !== "function") {
       // Android Chrome — no gate; permission is granted by browser policy.
       setPermission("granted");

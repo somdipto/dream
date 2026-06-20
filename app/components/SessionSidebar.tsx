@@ -5,6 +5,7 @@ import { useSessions } from "./SessionProvider";
 import type { Session } from "../lib/session-types";
 import { usePlatform } from "../hooks/usePlatform";
 import { CuratedGallery } from "./CuratedGallery";
+import { dreamBus } from "../lib/event-bus";
 
 // Toggleable sidebar showing the user's saved sessions.
 //
@@ -511,6 +512,28 @@ function SessionCard({
                   <p className="mt-0.5 text-[10px] text-white/40">
                     {new Date(scene.timestamp).toLocaleString()}
                   </p>
+                </button>
+                {/* QA4: replay button. Re-renders this exact
+                    scene (same prompt + same seed) so the user
+                    can revisit a favorite world. Distinguished
+                    from tapping the prompt (which currently
+                    does the same thing — both load the seed)
+                    by giving it a clear icon. */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dreamBus.emit("dream:loadScene", {
+                      prompt: scene.prompt,
+                      seed: scene.seed,
+                    });
+                  }}
+                  aria-label={`Replay "${scene.prompt}"`}
+                  title="Replay this scene"
+                  data-testid="scene-replay"
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
+                >
+                  ↻
                 </button>
                 {/* QA3: heart toggle. Favorited scenes show in
                     a separate section above the regular list

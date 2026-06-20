@@ -243,17 +243,20 @@ export function DesktopDream() {
 
       const result = await Promise.race([pipeline, timeoutPromise]);
       if (timeoutId) clearTimeout(timeoutId);
+      // QA4: emit dream:paintDone on all outcomes.
+      const paintMs = Date.now() - paintStart;
       if (result === "ok") {
         setPhase("live");
         setError(null);
-        // QA3: paint duration for the StatusBadge.
-        dreamBus.emit("dream:paintDone", { ms: Date.now() - paintStart });
+        dreamBus.emit("dream:paintDone", { ms: paintMs, ok: true });
       } else if (result === "err") {
         setError("Generation failed — your prompt is saved, try again in a moment");
         if (!generating) setPhase("idle");
+        dreamBus.emit("dream:paintDone", { ms: paintMs, ok: false });
       } else {
         setError("Reactor is slow — your prompt is saved. The world may still be painting in the background.");
         if (!generating) setPhase("idle");
+        dreamBus.emit("dream:paintDone", { ms: paintMs, ok: false });
       }
       inFlightRef.current = false;
       // Consume the pose lock — only affects the next paint.

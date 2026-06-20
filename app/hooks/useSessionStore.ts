@@ -345,24 +345,55 @@ export function useSessionStoreImpl(): UseSessionStore {
     clearCorruptBackups();
   }, []);
 
-  return {
-    sessions,
-    activeSession,
-    activeSessionId: activeId,
-    addScene,
-    removeScene,
-    createSession,
-    loadSession,
-    deleteSession,
-    restoreSession,
-    renameSession,
-    setActive,
-    toggleFavorite,
-    recentPrompts,
-    pruneNotice,
-    hydrated,
-    recoveryNotice,
-    restoreBackup,
-    dismissRecovery,
-  };
+  // QA4: memoize the returned store object so consumers don't
+  // re-render on every parent state change. Previously the
+  // object literal was a new reference every render, which
+  // propagated to <SessionContext.Provider value=...> and
+  // re-rendered every consumer (Sidebar, VoiceDream, etc.)
+  // on every keystroke in the interim transcript. The
+  // callbacks are already useCallback'd and stable; only the
+  // state values change identity between renders, so the
+  // memo is keyed on those.
+  return useMemo(
+    () => ({
+      sessions,
+      activeSession,
+      activeSessionId: activeId,
+      addScene,
+      removeScene,
+      createSession,
+      loadSession,
+      deleteSession,
+      restoreSession,
+      renameSession,
+      setActive,
+      toggleFavorite,
+      recentPrompts,
+      pruneNotice,
+      hydrated,
+      recoveryNotice,
+      restoreBackup,
+      dismissRecovery,
+    }),
+    [
+      sessions,
+      activeSession,
+      activeId,
+      pruneNotice,
+      hydrated,
+      recoveryNotice,
+      addScene,
+      removeScene,
+      createSession,
+      loadSession,
+      deleteSession,
+      restoreSession,
+      renameSession,
+      setActive,
+      toggleFavorite,
+      recentPrompts,
+      restoreBackup,
+      dismissRecovery,
+    ],
+  );
 }

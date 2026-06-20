@@ -70,8 +70,23 @@ const RATE_LIMIT_REFILL_MS = 10_000;
 const BUCKET_TTL_MS = 10 * 60 * 1000;
 const buckets = new Map<string, { tokens: number; updatedAt: number }>();
 
+// QA4: inline lazy eviction of stale buckets inside takeToken.
+// Previously a 60s setInterval held strong refs to the bucket
+// map via its closure (unref only releases the timer, not the
+// captured state) — under sustained traffic the map grew
+// unbounded between sweeps and the cadence was coarse enough
+// that a 10s/IP burst could leak through.
 function takeToken(ip: string): boolean {
   const now = Date.now();
+  // Cheap O(n) sweep, gated on a clock so it's free in the
+  // common case (last sweep was recent).
+  if (buckets.size > 32 && now - lastSweepAt > 30_000) {
+    const cutoff = now - BUCKET_TTL_MS;
+    for (const [k, v] of buckets) {
+      if (v.updatedAt < cutoff) buckets.delete(k);
+    }
+    lastSweepAt = now;
+  }
   const b = buckets.get(ip) ?? { tokens: RATE_LIMIT_BURST, updatedAt: now };
   const elapsed = now - b.updatedAt;
   const refill = (elapsed / RATE_LIMIT_REFILL_MS) * 1;
@@ -84,29 +99,20 @@ function takeToken(ip: string): boolean {
   return true;
 }
 
-// Periodic sweep of stale bucket entries. Started lazily on the first
-// request (a top-level setInterval would keep the process alive; the
-// unref below makes that not happen). Idempotent: safe to call many
-// times.
-let sweepStarted = false;
-function ensureSweep() {
-  if (sweepStarted) return;
-  sweepStarted = true;
-  const interval = setInterval(() => {
-    const cutoff = Date.now() - BUCKET_TTL_MS;
-    for (const [ip, b] of buckets) {
-      if (b.updatedAt < cutoff) buckets.delete(ip);
+// QA4: lazy sweep timestamp (replaces the setInterval which
+// kept the process alive and held strong references).
+let lastSweepAt = 0;
+
+// QA4: also expire key-pool entries lazily inside takeToken
+// (instead of via the swept setInterval). The pool is small
+// so the per-call cost is trivial.
+function expireKeyPoolEntries(now: number) {
+  for (const k of keyPool.keys) {
+    if (k.exhaustedUntil && now >= k.exhaustedUntil) {
+      k.exhaustedUntil = null;
+      k.lastError = null;
     }
-    // Also expire key-pool entries that are past their parked
-    // window. The pool is small so the per-tick cost is trivial.
-    for (const k of keyPool.keys) {
-      if (k.exhaustedUntil && Date.now() >= k.exhaustedUntil) {
-        k.exhaustedUntil = null;
-        k.lastError = null;
-      }
-    }
-  }, 60_000);
-  if (typeof interval.unref === "function") interval.unref();
+  }
 }
 
 // Trust X-Forwarded-For AND X-Real-IP only if we are explicitly
@@ -120,6 +126,32 @@ function clientIp(headers: Headers, trustProxy: boolean): string {
     if (fwd) return fwd;
     const real = headers.get("x-real-ip")?.trim();
     if (real) return real;
+  }
+  // QA4: even without a proxy, accept X-Real-IP if present
+  // (some edge runtimes set it without the trust flag) but
+  // ALSO try to derive a per-connection key from
+  // CF-Connecting-IP / Fly-Client-IP / True-Client-IP, then
+  // fall back to a SHA-256 of the User-Agent so that all
+  // direct connections do NOT collapse into a single
+  // "unknown" bucket. Without this, every direct request
+  // from a different user shared one 5-burst bucket.
+  const real = headers.get("x-real-ip")?.trim();
+  if (real) return real;
+  const cf = headers.get("cf-connecting-ip")?.trim();
+  if (cf) return cf;
+  const fly = headers.get("fly-client-ip")?.trim();
+  if (fly) return fly;
+  const tci = headers.get("true-client-ip")?.trim();
+  if (tci) return tci;
+  // Last resort: bucket by User-Agent hash. Same UA across
+  // users still collides but realistically users on the same
+  // browser+major-version are still rare.
+  const ua = headers.get("user-agent") ?? "";
+  if (ua) {
+    // Tiny non-cryptographic hash; we just need stable bucketing.
+    let h = 5381;
+    for (let i = 0; i < ua.length; i++) h = ((h * 33) ^ ua.charCodeAt(i)) >>> 0;
+    return `ua-${h.toString(36)}`;
   }
   return "unknown";
 }
@@ -350,7 +382,10 @@ async function mintTokenWithKey(
 // ---------------------------------------------------------------------------
 
 export async function GET(req: Request) {
-  ensureSweep();
+  // QA4: lazy expiration of parked key-pool entries on each
+  // request — replaces the ensureSweep() setInterval. Trivial
+  // cost (pool is bounded by key count, typically <10).
+  expireKeyPoolEntries(Date.now());
   const ip = clientIp(req.headers, process.env.TRUST_PROXY === "1");
   if (!takeToken(ip)) {
     return NextResponse.json(

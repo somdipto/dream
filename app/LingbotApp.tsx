@@ -370,16 +370,51 @@ function NewSessionConfirmModal({
   onCancel: () => void;
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  // QA4: keep the last focused element on the page so we can
+  // restore focus on close (and to detect Tab cycling outside
+  // the modal in the keydown handler below).
+  const previousFocusRef = useRef<Element | null>(null);
   useEffect(() => {
+    if (typeof document === "undefined") return;
+    previousFocusRef.current = document.activeElement;
     confirmRef.current?.focus();
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
         onCancel();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      // QA4: simple 2-button focus trap. If focus is on the
+      // last button and the user Tabs forward, send it back to
+      // the first; Shift+Tab on the first button sends it to
+      // the last. Prevents focus from escaping the dialog into
+      // the page behind (where the recovery banner's Discard
+      // button could be triggered accidentally).
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey) {
+        if (active === cancelRef.current) {
+          e.preventDefault();
+          confirmRef.current?.focus();
+        }
+      } else {
+        if (active === confirmRef.current) {
+          e.preventDefault();
+          cancelRef.current?.focus();
+        }
       }
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      // Restore focus to the element that opened the modal so
+      // keyboard users don't lose their place.
+      const prev = previousFocusRef.current as HTMLElement | null;
+      if (prev && typeof prev.focus === "function") {
+        try { prev.focus(); } catch { /* element unmounted */ }
+      }
+    };
   }, [onCancel]);
   return (
     <div
@@ -410,6 +445,7 @@ function NewSessionConfirmModal({
         </p>
         <div className="mt-5 flex justify-end gap-2">
           <button
+            ref={cancelRef}
             type="button"
             onClick={onCancel}
             className="min-h-[40px] rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
@@ -432,6 +468,261 @@ function NewSessionConfirmModal({
   );
 }
 
+// QA4: tiny confirm dialog for the recovery banner's Discard
+// button. Previously this used window.confirm which is hostile
+// on mobile Safari (blocks the JS thread, can be dismissed by
+// tapping outside the dialog, breaks the visual flow). Reuses
+// the same in-app modal pattern as NewSessionConfirmModal.
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+  destructive = false,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  destructive?: boolean;
+}) {
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<Element | null>(null);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    previousFocusRef.current = document.activeElement;
+    confirmRef.current?.focus();
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { e.preventDefault(); onCancel(); return; }
+      if (e.key !== "Tab") return;
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey) {
+        if (active === cancelRef.current) {
+          e.preventDefault();
+          confirmRef.current?.focus();
+        }
+      } else {
+        if (active === confirmRef.current) {
+          e.preventDefault();
+          cancelRef.current?.focus();
+        }
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      const prev = previousFocusRef.current as HTMLElement | null;
+      if (prev && typeof prev.focus === "function") {
+        try { prev.focus(); } catch { /* unmounted */ }
+      }
+    };
+  }, [onCancel]);
+  return (
+    <div
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="confirm-dialog-title"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-6 backdrop-blur"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0a0a14]/95 p-5 text-white shadow-2xl">
+        <h2 id="confirm-dialog-title" className="text-base font-semibold text-white">{title}</h2>
+        <p className="mt-2 text-sm text-white/70">{message}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            ref={cancelRef}
+            type="button"
+            onClick={onCancel}
+            className="min-h-[40px] rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
+          >
+            Cancel
+          </button>
+          <button
+            ref={confirmRef}
+            type="button"
+            onClick={onConfirm}
+            className={
+              destructive
+                ? "min-h-[40px] rounded-full border border-red-400/40 bg-red-500/30 px-4 py-2 text-sm font-medium text-red-100 hover:bg-red-500/40"
+                : "min-h-[40px] rounded-full border border-emerald-400/40 bg-emerald-500/30 px-4 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-500/40"
+            }
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// QA4: keyboard-shortcuts overlay. Toggled by pressing "?"
+// anywhere in the world surface (ignored on the Begin overlay
+// because the world isn't active yet). Lists every shortcut
+// we ship, grouped by context.
+const SHORTCUT_GROUPS: Array<{ title: string; items: Array<[string, string]> }> = [
+  {
+    title: "World",
+    items: [
+      ["W / A / S / D", "Walk forward / left / back / right"],
+      ["↑ ↓ ← →", "Walk (arrow keys)"],
+      ["Q / E", "Look left / right"],
+      ["Space", "Pause / resume the world"],
+      ["Shift", "Hold to walk faster"],
+    ],
+  },
+  {
+    title: "Voice",
+    items: [
+      ["Mic button", "Mute / unmute the mic"],
+      ["Tap-and-hold on mobile", "Push-to-talk instead of auto-listen"],
+    ],
+  },
+  {
+    title: "Journal",
+    items: [
+      ["☰", "Open the saved-scenes sidebar"],
+      ["?", "Show / hide this shortcuts panel"],
+      ["Esc", "Close any open dialog"],
+    ],
+  },
+];
+
+function ShortcutsModal({ onClose }: { onClose: () => void }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<Element | null>(null);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    previousFocusRef.current = document.activeElement;
+    closeRef.current?.focus();
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      const prev = previousFocusRef.current as HTMLElement | null;
+      if (prev && typeof prev.focus === "function") {
+        try { prev.focus(); } catch { /* unmounted */ }
+      }
+    };
+  }, [onClose]);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shortcuts-title"
+      data-testid="shortcuts-modal"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0a14]/95 p-5 text-white shadow-2xl">
+        <h2 id="shortcuts-title" className="text-base font-semibold text-white">
+          Keyboard shortcuts
+        </h2>
+        <p className="mt-1 text-xs text-white/55">
+          Press <kbd className="rounded border border-white/15 bg-white/5 px-1.5 py-0.5 font-mono text-[10px]">?</kbd> any time to bring this back.
+        </p>
+        <div className="mt-4 space-y-4">
+          {SHORTCUT_GROUPS.map((g) => (
+            <div key={g.title}>
+              <p className="text-[10px] uppercase tracking-wider text-white/45">{g.title}</p>
+              <dl className="mt-1.5 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+                {g.items.map(([k, v]) => (
+                  <div key={k} className="contents">
+                    <dt>
+                      <kbd className="rounded border border-white/15 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-white/85">
+                        {k}
+                      </kbd>
+                    </dt>
+                    <dd className="text-white/70">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          ))}
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            ref={closeRef}
+            type="button"
+            onClick={onClose}
+            className="min-h-[40px] rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
+            data-testid="shortcuts-close"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// QA4: First-run onboarding hint. Shown the first time the
+// user visits Dream; the dismissal is persisted in
+// localStorage so the Begin overlay stays clean on subsequent
+// visits. The steps are platform-aware: mobile users see
+// voice + tilt, desktop users see keyboard + text.
+function FirstRunHint() {
+  const [visible, setVisible] = useState(false);
+  const platform = usePlatform();
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (window.localStorage.getItem("lingbot.hint.seen.v1") === "1") return;
+    } catch {
+      return; // localStorage blocked; skip the hint rather than crash.
+    }
+    setVisible(true);
+  }, []);
+  if (!visible) return null;
+  const isMobile = platform.isMobile;
+  const steps = isMobile
+    ? [
+        "Tap Begin, then allow microphone + motion.",
+        "Tilt your phone to look around; speak to change the world.",
+        "Tap ☰ to revisit or replay any saved scene.",
+      ]
+    : [
+        "Tap Begin. A first scene paints itself.",
+        "Use W A S D or arrow keys to walk; Q / E to look.",
+        "Tap ☰ to browse the journal, or press ? for all shortcuts.",
+      ];
+  return (
+    <div
+      data-testid="first-run-hint"
+      className="mx-auto mt-4 w-full max-w-sm rounded-2xl border border-white/10 bg-white/5 p-3 text-left text-xs text-white/75 backdrop-blur"
+    >
+      <p className="mb-2 text-[10px] uppercase tracking-wider text-white/45">
+        First time here?
+      </p>
+      <ol className="space-y-1.5">
+        {steps.map((s, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/10 text-[10px] font-semibold text-white/85">
+              {i + 1}
+            </span>
+            <span className="flex-1 leading-snug">{s}</span>
+          </li>
+        ))}
+      </ol>
+      <button
+        type="button"
+        onClick={() => {
+          try { window.localStorage.setItem("lingbot.hint.seen.v1", "1"); } catch { /* ignore */ }
+          setVisible(false);
+        }}
+        data-testid="first-run-dismiss"
+        className="mt-3 w-full rounded-full border border-white/15 bg-white/5 py-1.5 text-xs text-white/85 hover:bg-white/10"
+      >
+        Got it
+      </button>
+    </div>
+  );
+}
+
 // A surface that picks its controls by platform:
 //   - desktop  → keyboard + mouse + text input. Default scene paints
 //                itself on connect so the screen is never black.
@@ -447,6 +738,11 @@ function DreamSurface() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [vrMode, setVrMode] = useState(false);
   const [pruneToast, setPruneToast] = useState<string | null>(null);
+  // QA4: ? opens the keyboard-shortcuts overlay. Dismissed
+  // with Escape or by tapping outside. Available on every
+  // platform because mobile users with bluetooth keyboards
+  // (iPad Pro etc.) benefit too.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // QA2: replace window.confirm with a custom in-app modal.
   // Mobile Safari's native confirm blocks the JS thread, can be
   // dismissed by tapping outside the dialog, and breaks the
@@ -456,6 +752,11 @@ function DreamSurface() {
     title: string;
     sceneCount: number;
   } | null>(null);
+
+  // QA4: separate state for the recovery-banner's Discard
+  // confirmation. Was previously window.confirm which is
+  // hostile on mobile Safari.
+  const [recoveryDiscardConfirm, setRecoveryDiscardConfirm] = useState(false);
 
   // Show a non-blocking toast when localStorage is full and we prune.
   // Deduped: ignore further increments while a toast is already
@@ -468,6 +769,31 @@ function DreamSurface() {
       return () => clearTimeout(t);
     }
   }, [sessions.pruneNotice, pruneToast]);
+
+  // QA4: ? opens the shortcuts overlay. Also Escape closes it
+  // when it's the only open modal. We keep this listener at
+  // the surface level so it doesn't fire on the Begin overlay
+  // (where there's no "world" yet to act on).
+  useEffect(() => {
+    if (!hasBegun) return;
+    function onKey(e: KeyboardEvent) {
+      // Ignore key combos with modifiers so we don't steal
+      // browser shortcuts.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // ? or Shift+/
+      if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+        e.preventDefault();
+        setShortcutsOpen((v) => !v);
+        return;
+      }
+      if (e.key === "Escape" && shortcutsOpen) {
+        e.preventDefault();
+        setShortcutsOpen(false);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hasBegun, shortcutsOpen]);
 
   const handleBegin = useCallback(() => {
     if (platform.isMobile) {
@@ -657,15 +983,7 @@ function DreamSurface() {
               </span>
               <button
                 type="button"
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Discard the recoverable snapshot? This can't be undone.",
-                    )
-                  ) {
-                    sessions.dismissRecovery();
-                  }
-                }}
+                onClick={() => setRecoveryDiscardConfirm(true)}
                 className="rounded-full border border-amber-400/30 px-3 py-1 text-amber-100 hover:bg-amber-500/20"
                 data-testid="recovery-discard-btn"
               >
@@ -718,6 +1036,12 @@ function DreamSurface() {
           >
             Begin
           </button>
+          {/* QA4: First-run hint. Shown only the first time the
+              user visits; dismissed permanently via
+              localStorage. Three numbered steps walk through
+              the basic flow. Skipping on subsequent visits
+              keeps the Begin overlay clean for repeat users. */}
+          <FirstRunHint />
           <ByokKeyField />
           <BlackScreenMemoryChip />
           <p className="mt-6 text-[10px] uppercase tracking-wider text-white/40">
@@ -748,6 +1072,19 @@ function DreamSurface() {
               className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-black/40 text-white/80 backdrop-blur hover:bg-black/60"
             >
               ☰
+            </button>
+            {/* QA4: ? opens the keyboard-shortcuts overlay.
+                Available on every platform — mobile users with
+                bluetooth keyboards (iPad Pro etc.) benefit
+                from the same shortcut list. */}
+            <button
+              type="button"
+              onClick={() => setShortcutsOpen(true)}
+              aria-label="Show keyboard shortcuts"
+              data-testid="shortcuts-btn"
+              className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-black/40 text-xs text-white/80 backdrop-blur hover:bg-black/60"
+            >
+              ?
             </button>
             <StatusBadge />
           </div>
@@ -1041,6 +1378,22 @@ function DreamSurface() {
           }}
           onCancel={() => setNewSessionConfirm(null)}
         />
+      )}
+      {recoveryDiscardConfirm && (
+        <ConfirmDialog
+          title="Discard recoverable snapshot?"
+          message="This permanently removes the last saved journal snapshot. You can't get it back."
+          confirmLabel="Discard"
+          destructive
+          onConfirm={() => {
+            sessions.dismissRecovery();
+            setRecoveryDiscardConfirm(false);
+          }}
+          onCancel={() => setRecoveryDiscardConfirm(false)}
+        />
+      )}
+      {shortcutsOpen && (
+        <ShortcutsModal onClose={() => setShortcutsOpen(false)} />
       )}
 
       {/* VR mode — fullscreen overlay. Renders two side-by-side

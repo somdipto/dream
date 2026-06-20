@@ -26,12 +26,24 @@ export interface ScenePromptOptions {
   isFirst?: boolean;
 }
 
+// QA4: hard cap on user input. Reactor/Lingbot can choke on
+// very long prompts (10k+ chars) and produce a black frame
+// instead of an error. 500 chars is enough for any plausible
+// scene description and well within the model's comfort zone.
+export const MAX_PROMPT_CHARS = 500;
+
 /**
  * Compose a full Lingbot prompt from a user phrase. The output is always a
  * self-contained paragraph the model can use as a complete description.
  */
 export function composeScenePrompt({ text, isFirst = false }: ScenePromptOptions): string {
-  const subject = cleanSubject(text);
+  // QA4: sanitize at the boundary so every caller benefits
+  // from the same control-char stripping and length cap.
+  // Previously, a 10k-char paste could reach Reactor and
+  // produce a black frame; a transcript of " . " would
+  // yield a "." subject. Both fixed here.
+  const safe = sanitizeUserText(text);
+  const subject = cleanSubject(safe);
 
   // Three blocks: (1) "This is a..." opener (matches Lingbot examples exactly),
   // (2) the world as the user described it, (3) the camera & motion grammar.
@@ -50,13 +62,31 @@ export function composeScenePrompt({ text, isFirst = false }: ScenePromptOptions
 }
 
 /**
+ * QA4: sanitize a raw user transcript before it ever reaches
+ * composeScenePrompt. Strips control characters that could
+ * cause log-injection if we ever log the prompt, and trims
+ * to MAX_PROMPT_CHARS to bound the request size.
+ */
+export function sanitizeUserText(raw: string): string {
+  if (typeof raw !== "string") return "";
+  return raw
+    // Strip C0 control chars except newline and tab. U+0000–U+0008,
+    // U+000B–U+001F, and the C1 range U+0080–U+009F.
+    .replace(/[\x00-\x08\x0B-\x1F\x7F-\x9F]/g, "")
+    // Collapse runs of whitespace.
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_PROMPT_CHARS);
+}
+
+/**
  * Convert "a dragon in the sky at dusk" → "a dragon in the sky at dusk".
  * Currently a passthrough but reserved for future normalization
  * (pronoun resolution, plural/singular, etc.).
  */
 function cleanSubject(text: string): string {
   const t = text.trim().replace(/[.!?]+$/, "");
-  if (!t) return "an atmospheric environment";
+  if (!t || t.length < 3) return "an atmospheric environment";
   // Lowercase first letter only if it doesn't start with a proper noun heuristic
   const lowered = t.charAt(0).toLowerCase() + t.slice(1);
   return lowered || "an atmospheric environment";

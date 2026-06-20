@@ -34,11 +34,15 @@ export interface DreamBusEvents {
    *  that each Promise.race winner checks before calling
    *  `sessions.addScene`. Cheap, no SDK change required. */
   "dream:abortPaint": Record<string, never>;
-  /** QA3: emitted after a paint successfully lands. Carries the
-   *  time taken in milliseconds. The StatusBadge uses it to show
+  /** QA3: emitted after every paint attempt (success or fail).
+   *  Carries the time taken in milliseconds and whether the
+   *  paint succeeded. The StatusBadge uses it to show
    *  "Last paint: 4.2s" so the user can see the connection
-   *  is healthy. */
-  "dream:paintDone": { ms: number };
+   *  is healthy. QA4: now emitted on all outcomes so the
+   *  user can tell "model is up but internal details was bad"
+   *  apart from "connection is broken" — failures show as
+   *  a stale duration with the dot color flipping to amber. */
+  "dream:paintDone": { ms: number; ok: boolean };
 }
 
 type EventName = keyof DreamBusEvents;
