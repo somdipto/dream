@@ -27,6 +27,7 @@ import { dreamBus } from "../lib/event-bus";
 import { recordBlackScreen } from "../lib/black-screen-log";
 import { parseVoiceStyle } from "../lib/voice-style-parser";
 import { captureCurrentFrame } from "../lib/pose-lock";
+import { pickSurprisePrompt } from "../lib/surprise-prompts";
 
 // The single hero surface of the app.
 //
@@ -522,6 +523,20 @@ export function VoiceDream() {
     void paintDream(base, { seed });
   }
 
+  // QA6/F5: Surprise me. Same as DesktopDream's variant —
+  // picks a fresh prompt from the curated surprise list and
+  // auto-paints it. Even users with no prior prompt can
+  // tap it.
+  function onSurprise() {
+    const p = pickSurprisePrompt();
+    setText(p);
+    setLastPrompt(p);
+    const seed = hashSeed(p + ":" + sessionNonceRef.current.toString(16)) >>> 0;
+    setLastSeed(seed);
+    sessions.addScene({ prompt: p, seed });
+    void paintDream(p, { seed });
+  }
+
   async function onShare() {
     const prompt = lastPrompt;
     if (!prompt) return;
@@ -628,6 +643,17 @@ export function VoiceDream() {
           className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/10 text-white/85 transition hover:bg-white/20 disabled:opacity-40"
         >
           🎲
+        </button>
+        {/* QA6/F5: Surprise me. */}
+        <button
+          type="button"
+          onClick={onSurprise}
+          aria-label="Surprise me with a random dream"
+          title="Surprise me"
+          data-testid="mobile-surprise-btn"
+          className="grid h-10 w-10 place-items-center rounded-full border border-amber-300/30 bg-amber-400/15 text-amber-100 transition hover:bg-amber-400/30"
+        >
+          ✨
         </button>
         <button
           type="button"

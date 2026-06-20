@@ -26,6 +26,7 @@ import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "..
 import { dreamBus } from "../lib/event-bus";
 import { parseVoiceStyle } from "../lib/voice-style-parser";
 import { captureCurrentFrame } from "../lib/pose-lock";
+import { pickSurprisePrompt } from "../lib/surprise-prompts";
 
 // Desktop equivalent of VoiceDream. Same paint pipeline (reset →
 // fresh seed image → setImage → setPrompt → start) but driven by a
@@ -513,6 +514,21 @@ export function DesktopDream() {
     void paintDream(base, { seed });
   }
 
+  // QA6/F5: Surprise me. Picks a fresh prompt from the
+  // surprise list and auto-paints it. Solves the
+  // empty-state problem for first-time users who don't
+  // know what to type — and gives returning users a
+  // way to break out of a creative rut.
+  function onSurprise() {
+    const p = pickSurprisePrompt();
+    setText(p);
+    setLastPrompt(p);
+    const seed = hashSeed(p + ":" + sessionNonceRef.current.toString(16)) >>> 0;
+    setLastSeed(seed);
+    sessions.addScene({ prompt: p, seed });
+    void paintDream(p, { seed });
+  }
+
   async function onShare() {
     if (!lastPrompt) return;
     const seed = lastSeed ?? hashSeed(lastPrompt + ":" + sessionNonceRef.current.toString(16)) >>> 0;
@@ -603,6 +619,20 @@ export function DesktopDream() {
           className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-white/10 bg-white/10 text-base text-white/85 transition hover:bg-white/20 disabled:opacity-40"
         >
           🎲
+        </button>
+        {/* QA6/F5: Surprise me. Sits next to the reroll
+            button so it's discoverable. No disabled state —
+            even a brand-new user with no lastPrompt can
+            roll the dice. */}
+        <button
+          type="button"
+          onClick={onSurprise}
+          aria-label="Surprise me with a random dream"
+          title="Surprise me"
+          data-testid="desktop-surprise-btn"
+          className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-amber-300/30 bg-amber-400/15 text-base text-amber-100 transition hover:bg-amber-400/30"
+        >
+          ✨
         </button>
         <button
           type="button"

@@ -279,6 +279,14 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
               {favoritesOnly ? "♥" : "♡"}
             </button>
           ) : null}
+          {/* QA6/F4: Read my last dream. Uses the Web Speech
+              API (speechSynthesis) to narrate the user's last
+              few scenes back to them. Stops on second click.
+              Falls back gracefully on browsers without
+              speechSynthesis (Safari iOS sometimes lags). */}
+          {tab === "sessions" ? (
+            <ReadLastDreamButton />
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -619,6 +627,35 @@ function SessionCard({
                 >
                   ↻
                 </button>
+                {/* QA6/F6: Memory Beacon. Re-paints the scene
+                    with a "continuing forward" suffix so the
+                    world keeps evolving from where the user
+                    left it. Uses a fresh seed derived from
+                    the original seed + a counter so the
+                    *next* "continue" press is also different
+                    from this one. The model's reset() call
+                    (inside the loadScene handler) means this
+                    produces a *new* world that is *adjacent*
+                    to the original, not a literal continue —
+                    but the prompt suffix nudges the new
+                    scene in the right direction. */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const next = (scene.seed + 1) >>> 0;
+                    dreamBus.emit("dream:loadScene", {
+                      prompt: `${scene.prompt}, continuing forward`,
+                      seed: next,
+                    });
+                  }}
+                  aria-label={`Continue "${scene.prompt}" from here`}
+                  title="Continue from here"
+                  data-testid="scene-continue"
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
+                >
+                  ➡
+                </button>
                 {/* QA5/F4: download-as-PNG. Fetches the
                     scene's `image_url` (the model's source
                     frame) and saves it to the user's device
@@ -682,4 +719,80 @@ function timeAgo(t: number): string {
   const d = Math.floor(h / 24);
   if (d < 30) return `${d}d ago`;
   return new Date(t).toLocaleDateString();
+}
+
+// QA6/F4: Read my last dream. Uses the Web Speech API's
+// `speechSynthesis` to read the user's last few saved scenes
+// back to them. First tap starts reading; second tap stops.
+// iOS Safari needs an explicit user gesture before
+// speechSynthesis.speak() can play audio, which a tap on the
+// sidebar button satisfies.
+//
+// We render nothing on browsers without speechSynthesis
+// (older Android stock browsers, some WebViews).
+function ReadLastDreamButton() {
+  const store = useSessions();
+  const [reading, setReading] = useState(false);
+  const supported = typeof window !== "undefined" && "speechSynthesis" in window;
+  if (!supported) return null;
+  function start() {
+    const synth = window.speechSynthesis;
+    synth.cancel(); // clear any in-flight utterance
+    const session = store.activeSession;
+    if (!session || session.scenes.length === 0) {
+      const u = new SpeechSynthesisUtterance("You haven't dreamed anything yet. Tap a chip below to begin.");
+      u.rate = 0.95;
+      u.pitch = 0.9;
+      synth.speak(u);
+      setReading(true);
+      u.onend = () => setReading(false);
+      return;
+    }
+    // Read the last 5 scenes, oldest first — like a recap.
+    const scenes = [...session.scenes].slice(-5);
+    let i = 0;
+    function next() {
+      if (i >= scenes.length) {
+        // Closing summary.
+        const closing = new SpeechSynthesisUtterance("End of dream.");
+        closing.rate = 0.8;
+        closing.pitch = 0.8;
+        closing.onend = () => setReading(false);
+        synth.speak(closing);
+        return;
+      }
+      const scene = scenes[i++];
+      const u = new SpeechSynthesisUtterance(`${scene.prompt}.`);
+      u.rate = 0.95;
+      u.pitch = 1.0;
+      u.onend = next;
+      u.onerror = () => setReading(false);
+      synth.speak(u);
+    }
+    setReading(true);
+    next();
+  }
+  function stop() {
+    window.speechSynthesis.cancel();
+    setReading(false);
+  }
+  return (
+    <button
+      type="button"
+      onClick={reading ? stop : start}
+      aria-label={reading ? "Stop narration" : "Read my last dream aloud"}
+      aria-pressed={reading}
+      data-testid="read-last-dream-btn"
+      data-reading={reading ? "true" : "false"}
+      className={[
+        "grid h-9 w-9 place-items-center rounded-full border text-xs",
+        reading
+          ? "border-emerald-300/50 bg-emerald-400/20 text-emerald-100"
+          : "border-white/10 bg-white/5 text-white/55 hover:bg-white/10",
+      ].join(" ")}
+      title={reading ? "Stop narration" : "Read my last dream"}
+    >
+      {reading ? "■" : "🔊"}
+    </button>
+  );
 }
