@@ -146,15 +146,20 @@ export function VoiceDream() {
         //    - same prompt, two different sessions → two different images
         //    - different prompts, same session → two different images
         const blob = await generateSeedImage({ seed });
-        // Race the upload against 3s. If Reactor's upload slot is
-        // stuck, skip the seed image and start from the prompt only —
-        // the model still produces a world. The seed image is a
-        // visual anchor, not a hard requirement.
-        const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
-        const uploadTimeout = new Promise<null>((resolve) =>
-          setTimeout(() => resolve(null), 3000),
-        );
-        const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
+        // Try the upload twice with a 2s gap. Reactor's upload
+        // slot is occasionally sticky; a single retry almost always
+        // succeeds where the first call hung.
+        let ref: Awaited<ReturnType<typeof uploadFile>> | null = null;
+        for (let attempt = 0; attempt < 2 && !ref; attempt++) {
+          const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
+          const uploadTimeout = new Promise<null>((resolve) =>
+            setTimeout(() => resolve(null), 4000),
+          );
+          ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<ReturnType<typeof uploadFile>> | null;
+          if (!ref && attempt === 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+          }
+        }
 
         // 3. setImage, then wait for image_accepted. Track whether
         //    the model actually acknowledged the image; if not, we

@@ -114,16 +114,21 @@ export function DesktopDream() {
             await resetDone;
           }
           const blob = await generateSeedImage({ seed });
-          // Race the upload against 3s. If Reactor's upload slot is
-          // stuck (the most common failure mode in practice), skip
-          // the image and let the model start from a prompt-only
-          // state. The world is still generated; the seed image is
-          // just a visual anchor.
-          const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
-          const uploadTimeout = new Promise<null>((resolve) =>
-            setTimeout(() => resolve(null), 3000),
-          );
-          const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
+          // Try the upload twice with a 2s gap. Reactor's upload
+          // slot is occasionally sticky (the demo queue backs up),
+          // and a single retry almost always succeeds where the
+          // first call hung.
+          let ref: Awaited<ReturnType<typeof uploadFile>> | null = null;
+          for (let attempt = 0; attempt < 2 && !ref; attempt++) {
+            const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
+            const uploadTimeout = new Promise<null>((resolve) =>
+              setTimeout(() => resolve(null), 4000),
+            );
+            ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<ReturnType<typeof uploadFile>> | null;
+            if (!ref && attempt === 0) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+            }
+          }
           // Track whether the model actually accepted the image.
           // If the image_accepted callback never fires, we MUST NOT
           // call setPrompt/start — Reactor requires an image to be

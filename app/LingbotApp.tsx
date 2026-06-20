@@ -352,20 +352,26 @@ function DesktopDefaultScene({
       try {
         const seed = Math.floor(Math.random() * 0xffffffff);
         const blob = await generateSeedImage({ seed });
-        // Race the seed-image upload against 3s. If Reactor's upload
-        // slot is stuck, we can't safely fall through to a
-        // prompt-only paint — Reactor rejects start() with "No
-        // image set. Call set_image first." when no anchor image
-        // has been acknowledged. So we must either succeed with an
-        // image or abort the auto-paint entirely.
-        const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
-        const uploadTimeout = new Promise<null>((resolve) =>
-          setTimeout(() => resolve(null), 3000),
-        );
-        const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
+        // Try the upload twice with a 2s gap. Reactor's upload
+        // slot is occasionally sticky; a retry almost always
+        // succeeds where the first call hung. We can't safely
+        // paint without an anchor image (Reactor rejects start()
+        // with "No image set") so we abort the auto-paint if both
+        // attempts fail.
+        let ref: Awaited<ReturnType<typeof uploadFile>> | null = null;
+        for (let attempt = 0; attempt < 2 && !ref; attempt++) {
+          const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
+          const uploadTimeout = new Promise<null>((resolve) =>
+            setTimeout(() => resolve(null), 4000),
+          );
+          ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<ReturnType<typeof uploadFile>> | null;
+          if (!ref && attempt === 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+          }
+        }
         if (!ref) {
           // eslint-disable-next-line no-console
-          console.warn("[dream] default scene seed upload timed out — aborting auto-paint, waiting for user input");
+          console.warn("[dream] default scene seed upload failed twice — aborting auto-paint, waiting for user input");
           return;
         }
         await setImage({ image: ref });
