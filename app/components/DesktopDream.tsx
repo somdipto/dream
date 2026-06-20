@@ -109,14 +109,18 @@ export function DesktopDream() {
         await conditionsReady;
         await start();
         setPhase("live");
-        // Append to active session. `addScene` auto-creates a session
-        // if none is active — the user's "memory" requirement.
-        sessions.addScene({ prompt: text, seed });
       } catch (e: any) {
         setError(e?.message ?? String(e));
         if (!generating) setPhase("idle");
       } finally {
         inFlightRef.current = false;
+        // Always save the user's prompt to the session — even if the
+        // Reactor backend fails (upload hang, network, quota). The
+        // "memory" requirement says whatever the user does in a
+        // session must persist locally. The seed stays valid for
+        // replay: re-running paint with the same seed regenerates the
+        // exact same anchor.
+        sessions.addScene({ prompt: text, seed });
         const next = queuedRef.current;
         queuedRef.current = null;
         if (next) {

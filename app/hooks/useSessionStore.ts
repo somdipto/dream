@@ -76,12 +76,8 @@ export function useSessionStoreImpl(): UseSessionStore {
         seed: input.seed >>> 0,
         timestamp: Date.now(),
       };
-      // eslint-disable-next-line no-console
-      console.log("[ss] addScene prompt=", trimmed.slice(0, 20), "activeId=", activeId, "sessions=", sessions.length);
       setSessions((prev) => {
         if (activeId === null || !prev.some((s) => s.id === activeId)) {
-          // eslint-disable-next-line no-console
-          console.log("[ss]   creating new session");
           const newS: Session = {
             id: newSessionId(),
             title: deriveTitle([scene]),
@@ -131,8 +127,6 @@ export function useSessionStoreImpl(): UseSessionStore {
 
   const createSession = useCallback(
     (opts?: { title?: string; seed?: { prompt: string; seed: number } | null }): string => {
-      // eslint-disable-next-line no-console
-      console.log("[ss] createSession called");
       const seedScene: Scene | null =
         opts?.seed && opts.seed.prompt.trim()
           ? {

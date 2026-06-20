@@ -123,6 +123,10 @@ export function VoiceDream() {
       setPulse((p) => p + 1);
       setPhase("loading");
 
+      // Hoist seed for the finally block — the session must save the
+      // prompt even if the backend fails.
+      const seed = hashSeed(text + ":" + sessionNonceRef.current.toString(16));
+
       try {
         // 1. Always reset first. Lingbot's contract says image/prompt
         //    can only be set on a clean (non-running) session. Reset
@@ -141,7 +145,6 @@ export function VoiceDream() {
         //    - same prompt, same session, called twice → two different images
         //    - same prompt, two different sessions → two different images
         //    - different prompts, same session → two different images
-        const seed = hashSeed(text + ":" + sessionNonceRef.current.toString(16));
         const blob = await generateSeedImage({ seed });
         const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
 
@@ -168,16 +171,17 @@ export function VoiceDream() {
         // 6. Start the generation. New scene, fresh world.
         await start();
         setPhase("live");
-        // 7. Append to active session. This is the "LiveVocs" hookup:
-        //    every spoken phrase is automatically added to the current
-        //    session screen. `addScene` auto-creates a session if none
-        //    is active so memory is never lost.
-        sessions.addScene({ prompt: text, seed });
       } catch (e: any) {
         setError(e?.message ?? String(e));
         if (!generating) setPhase("idle");
       } finally {
         inFlightRef.current = false;
+        // Always save the spoken phrase to the active session — even
+        // if Reactor's backend is failing (upload hang, network
+        // drop, etc). The "LiveVocs" requirement: every spoken phrase
+        // is automatically added to the current session screen, so
+        // the user's voice work is never lost.
+        sessions.addScene({ prompt: text, seed });
         // Drain the queue: if the user spoke again while we were busy,
         // fire the latest queued text now.
         const next = queuedRef.current;
