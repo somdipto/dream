@@ -226,7 +226,23 @@ export function VoiceDream() {
             resetReadyRef.current = null;
           }
           const blob = poseLocked
-            ? await captureCurrentFrame().then((b) => b ?? generateSeedImage({ seed }))
+            ? await captureCurrentFrame().then((b) => {
+                // QA6: tell the user when the locked frame
+                // couldn't be captured (most often: cross-
+                // origin video tainted the canvas). Falling
+                // back to a seed image is correct, but the
+                // user clicked the lock button expecting the
+                // *current* frame — silent fallback feels
+                // broken. Emitted as a one-shot toast.
+                if (!b) {
+                  dreamBus.emit("dream:toast", {
+                    kind: "info",
+                    message: "Couldn't lock the current frame — using a fresh seed instead.",
+                    ttlMs: 3000,
+                  });
+                }
+                return b ?? generateSeedImage({ seed });
+              })
             : await generateSeedImage({ seed });
           let ref: Awaited<ReturnType<typeof uploadFile>> | null = null;
           for (let attempt = 0; attempt < 2 && !ref; attempt++) {

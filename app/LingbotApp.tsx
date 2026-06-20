@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { LingbotProvider, useLingbot } from "@reactor-models/lingbot";
 import { Video } from "./components/Video";
 import { DirectorOverlay } from "./components/DirectorOverlay";
+import { PromptTrail } from "./components/PromptTrail";
 import { StatusBadge } from "./components/StatusBadge";
 import { CommandError } from "./components/CommandError";
 import { VoiceDream } from "./components/VoiceDream";
@@ -1465,6 +1466,9 @@ function DreamSurface() {
   return (
     <main className="relative min-h-screen bg-black text-white">
       {topbar}
+      {/* QA7/F7: Paint Trail. Shows the user's last 20
+          prompts as fading pills above the action bar. */}
+      {hasBegun && !vrMode && <PromptTrail />}
       {sidebar}
       <CursorEmbed />
       {/* Video fills the screen as background. */}

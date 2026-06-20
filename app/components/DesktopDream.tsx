@@ -199,7 +199,23 @@ export function DesktopDream() {
             resetReadyRef.current = null;
           }
           const blob = poseLocked
-            ? await captureCurrentFrame().then((b) => b ?? generateSeedImage({ seed }))
+            ? await captureCurrentFrame().then((b) => {
+                // QA6: explain the silent fallback to the
+                // user. Cross-origin video taints the
+                // canvas, so captureCurrentFrame returns
+                // null and we fall back to a seed image.
+                // Without this toast, the user clicks the
+                // lock button and gets a different world
+                // — looks broken.
+                if (!b) {
+                  dreamBus.emit("dream:toast", {
+                    kind: "info",
+                    message: "Couldn't lock the current frame — using a fresh seed instead.",
+                    ttlMs: 3000,
+                  });
+                }
+                return b ?? generateSeedImage({ seed });
+              })
             : await generateSeedImage({ seed });
           let ref: Awaited<ReturnType<typeof uploadFile>> | null = null;
           for (let attempt = 0; attempt < 2 && !ref; attempt++) {
