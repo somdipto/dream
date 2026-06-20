@@ -62,13 +62,16 @@ function DreamSurface() {
   const [pruneToast, setPruneToast] = useState<string | null>(null);
 
   // Show a non-blocking toast when localStorage is full and we prune.
+  // Deduped: ignore further increments while a toast is already
+  // showing, so a permanently-over-quota user doesn't get a fresh
+  // toast every save. (Audit bug #22.)
   useEffect(() => {
-    if (sessions.pruneNotice > 0) {
+    if (sessions.pruneNotice > 0 && !pruneToast) {
       setPruneToast("Storage full — pruned oldest saved sessions.");
       const t = setTimeout(() => setPruneToast(null), 4000);
       return () => clearTimeout(t);
     }
-  }, [sessions.pruneNotice]);
+  }, [sessions.pruneNotice, pruneToast]);
 
   const handleBegin = useCallback(() => {
     if (platform.isMobile) {
@@ -108,12 +111,22 @@ function DreamSurface() {
   }, [disconnect, voice, platform.isMobile]);
 
   // Auto-retry once on transient disconnect (hackathon wifi is flaky).
+  // Bug #3: the previous version re-fired whenever `lastError` changed
+  // reference, queuing overlapping reconnect attempts. We gate on a
+  // boolean ref so we attempt exactly one reconnect per disconnect.
+  const reconnectingRef = useRef(false);
   useEffect(() => {
     if (status !== "disconnected" || !hasBegun || !lastError) return;
+    if (reconnectingRef.current) return;
+    reconnectingRef.current = true;
     const t = setTimeout(() => {
+      reconnectingRef.current = false;
       void connect();
     }, 1500);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      reconnectingRef.current = false;
+    };
   }, [status, hasBegun, lastError, connect]);
 
   // Before Begin: friendly landing overlay.
@@ -210,6 +223,13 @@ function DreamSurface() {
           }
           setSidebarOpen(false);
         }}
+        onPickCurated={(s) => {
+          // Curated gallery: also dispatch the same load event so the
+          // current Dream component re-paints with the curated seed.
+          window.dispatchEvent(
+            new CustomEvent("dream:loadScene", { detail: { prompt: s.prompt, seed: s.seed } }),
+          );
+        }}
       />
 
       {/* Top bar — connection state + session toggle + new + reset.
@@ -296,9 +316,9 @@ function DreamSurface() {
       )}
 
       {/* Headless controllers — run while connected. */}
-      {platform.isMobile ? (
+      {platform.isMobile && !vrMode ? (
         <GyroController enabled={status === "ready"} voiceListening={voice.listening} />
-      ) : (
+      ) : !platform.isMobile ? (
         <>
           <DesktopController enabled={status === "ready"} />
           <DesktopDefaultScene
@@ -307,7 +327,7 @@ function DreamSurface() {
             hasUserScenes={(sessions.activeSession?.scenes.length ?? 0) > 0}
           />
         </>
-      )}
+      ) : null}
 
       {/* Prune toast */}
       {pruneToast && (
@@ -360,7 +380,7 @@ function DesktopDefaultScene({
         // attempts fail.
         let ref: Awaited<ReturnType<typeof uploadFile>> | null = null;
         for (let attempt = 0; attempt < 2 && !ref; attempt++) {
-          const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
+          const uploadPromise = blob ? uploadFile(blob, { name: `seed-${seed}.png` }) : Promise.resolve(null);
           const uploadTimeout = new Promise<null>((resolve) =>
             setTimeout(() => resolve(null), 4000),
           );

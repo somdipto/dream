@@ -6,12 +6,16 @@ import {
   useLingbotState,
   useLingbotImageAccepted,
   useLingbotGenerationReset,
+  useLingbotConditionsReady,
   type LingbotStateMessage,
 } from "@reactor-models/lingbot";
 import { useVoice } from "../hooks/useVoice";
 import { generateSeedImage } from "../lib/seed-image";
 import { composeScenePrompt } from "../lib/scene-composer";
 import { useSessions } from "./SessionProvider";
+import { ChipStrip } from "./ChipStrip";
+import { STYLE_PRESETS, TIME_VARIANTS, findPreset, findVariant } from "../lib/style-presets";
+import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
 
 // Desktop equivalent of VoiceDream. Same paint pipeline (reset →
 // fresh seed image → setImage → setPrompt → start) but driven by a
@@ -32,6 +36,9 @@ export function DesktopDream() {
   const [text, setText] = useState("");
   const [phase, setPhase] = useState<"idle" | "loading" | "live">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [styleId, setStyleId] = useState<string | null>(null);
+  const [variantId, setVariantId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const inFlightRef = useRef(false);
   const queuedRef = useRef<string | null>(null);
@@ -39,8 +46,16 @@ export function DesktopDream() {
   const imageReadyRef = useRef<(() => void) | null>(null);
   const resetReadyRef = useRef<(() => void) | null>(null);
   const conditionsReadyRef = useRef<(() => void) | null>(null);
+  // Mirror of `snapshot` for use inside async closures. Without this,
+  // paintDream reads a stale snapshot at pipeline start and the
+  // post-timeout `setPhase("idle")` branch can fire even when the
+  // world is actively generating. (Audit bug #5.)
+  const snapshotRef = useRef<LingbotStateMessage | null>(null);
 
-  useLingbotState((msg) => setSnapshot(msg));
+  useLingbotState((msg) => {
+    setSnapshot(msg);
+    snapshotRef.current = msg;
+  });
 
   useLingbotImageAccepted(() => {
     if (imageReadyRef.current) {
@@ -56,71 +71,79 @@ export function DesktopDream() {
     }
   });
 
-  useEffect(() => {
-    if (!snapshot) return;
-    if (snapshot.has_image && snapshot.has_prompt && conditionsReadyRef.current) {
+  // The SDK exposes a dedicated `conditions_ready` event. This
+  // replaces the previous snapshot-inference (which raced against
+  // the state message stream and could resolve after the next
+  // setPrompt's conditionsReady ref was overwritten).
+  useLingbotConditionsReady(() => {
+    if (conditionsReadyRef.current) {
       conditionsReadyRef.current();
       conditionsReadyRef.current = null;
     }
-  }, [snapshot?.has_image, snapshot?.has_prompt]);
+  });
 
   const generating = snapshot?.started === true;
-  // We deliberately do NOT auto-flip phase to "live" from the
-  // `generating` snapshot. The `generating` flag turns on the
-  // moment the model accepts `start`, but the first video frame
-  // can take several seconds after that — and the user looking
-  // at a "live" badge over a still black canvas thinks the app
-  // is broken. We want "live" to mean "frames are flowing".
-  // paintDream's pipeline is the single place that flips to
-  // "live", and it does so only after the world has rendered.
+
+  // Compose the user text + style suffix + time/weather variant into
+  // the full prompt the model sees. We keep the raw text in `text`
+  // (so the user can edit it) and apply the suffixes only at submit.
+  function buildPrompt(raw: string): string {
+    const preset = findPreset(styleId);
+    const variant = findVariant(variantId);
+    const suffix = [preset?.suffix, variant?.suffix].filter(Boolean).join(", ");
+    return suffix ? `${raw}, ${suffix}` : raw;
+  }
+
+  // Clear all three ready-refs at the end of every paint, so a
+  // callback from a previous paint can't resolve a new paint's
+  // promise. (Audit bug #1.)
+  function clearReadyRefs() {
+    imageReadyRef.current = null;
+    resetReadyRef.current = null;
+    conditionsReadyRef.current = null;
+  }
 
   const paintDream = useCallback(
-    async (transcript: string, opts?: { seed?: number }) => {
-      const text = transcript.trim();
-      if (!text) return;
+    async (transcript: string, opts?: { seed?: number; promptOverride?: string }) => {
+      const t = transcript.trim();
+      if (!t) return;
       if (inFlightRef.current) {
-        queuedRef.current = text;
+        queuedRef.current = t;
         return;
       }
       inFlightRef.current = true;
       setError(null);
-      setLastPrompt(text);
+      setLastPrompt(t);
       setPhase("loading");
 
-      // If the caller provided a seed (e.g. from a stored scene), use
-      // it verbatim. Otherwise generate a fresh one so the same prompt
-      // twice produces two different worlds.
-      const seed = (opts?.seed ?? hashSeed(text + ":" + sessionNonceRef.current.toString(16))) >>> 0;
+      const seed = (opts?.seed ?? hashSeed(t + ":" + sessionNonceRef.current.toString(16))) >>> 0;
       setLastSeed(seed);
 
-      // Race the paint pipeline against an 8s wall clock. We do NOT want
-      // to leave the user staring at a "painting your dream…" pill
-      // for 30s on a single prompt — the model either starts producing
-      // frames within a few seconds or the backend is overloaded and
-      // we should fall back. The scene is already saved optimistically
-      // by the submit handler, so the worst case is the live preview
-      // doesn't update this time.
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
       const timeoutPromise = new Promise<"timeout">((resolve) => {
         timeoutId = setTimeout(() => resolve("timeout"), 8000);
       });
       const pipeline = (async (): Promise<"ok" | "err"> => {
         try {
-          if (generating || snapshot?.has_image) {
+          // First-paint path: there is no prior generation, so
+          // `useLingbotGenerationReset` will never fire a callback.
+          // Race the reset promise against 1.5s and treat timeout as
+          // "no reset was needed, proceed". (Audit bug #2.)
+          if (generating || snapshotRef.current?.has_image) {
             const resetDone = new Promise<void>((resolve) => {
               resetReadyRef.current = resolve;
             });
+            const resetTimeout = new Promise<void>((resolve) =>
+              setTimeout(() => resolve(), 1500),
+            );
             await reset();
-            await resetDone;
+            await Promise.race([resetDone, resetTimeout]);
+            resetReadyRef.current = null;
           }
           const blob = await generateSeedImage({ seed });
-          // Try the upload twice with a 2s gap. Reactor's upload
-          // slot is occasionally sticky (the demo queue backs up),
-          // and a single retry almost always succeeds where the
-          // first call hung.
           let ref: Awaited<ReturnType<typeof uploadFile>> | null = null;
           for (let attempt = 0; attempt < 2 && !ref; attempt++) {
-            const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
+            const uploadPromise = blob ? uploadFile(blob, { name: `seed-${seed}.png` }) : Promise.resolve(null);
             const uploadTimeout = new Promise<null>((resolve) =>
               setTimeout(() => resolve(null), 4000),
             );
@@ -129,43 +152,31 @@ export function DesktopDream() {
               await new Promise<void>((resolve) => setTimeout(resolve, 2000));
             }
           }
-          // Track whether the model actually accepted the image.
-          // If the image_accepted callback never fires, we MUST NOT
-          // call setPrompt/start — Reactor requires an image to be
-          // set first and rejects with "No image set" otherwise.
           let imageAccepted = false;
           if (ref) {
-            let imageReadyResolve!: () => void;
             const imageReady = new Promise<void>((resolve) => {
-              imageReadyResolve = resolve;
               imageReadyRef.current = resolve;
             });
             const imageReadyTimeout = new Promise<void>((resolve) =>
               setTimeout(() => resolve(), 6000),
             );
             await setImage({ image: ref });
-            // Whichever resolves first wins. The real `imageReady`
-            // sets the flag; the timeout does not. That way we
-            // know whether Reactor actually acknowledged the
-            // image.
             await Promise.race([
               imageReady.then(() => {
                 imageAccepted = true;
               }),
               imageReadyTimeout,
             ]);
+            imageReadyRef.current = null;
           } else {
             // eslint-disable-next-line no-console
             console.warn("[dream] seed upload timed out — aborting paint (no anchor image)");
           }
           if (!imageAccepted) {
-            // No anchor image → can't call setPrompt/start.
-            // Bail out and let the user retry. The prompt is
-            // already saved optimistically.
             return "err";
           }
-          const prompt = composeScenePrompt({ text, isFirst: !snapshot?.has_prompt });
-          // Race the conditions-ready callback against 3s.
+          const composed = opts?.promptOverride ?? buildPrompt(t);
+          const prompt = composeScenePrompt({ text: composed, isFirst: !snapshotRef.current?.has_prompt });
           const conditionsReady = new Promise<void>((resolve) => {
             conditionsReadyRef.current = resolve;
           });
@@ -174,10 +185,13 @@ export function DesktopDream() {
           );
           await setPrompt({ prompt });
           await Promise.race([conditionsReady, conditionsTimeout]);
+          conditionsReadyRef.current = null;
           await start();
           return "ok";
         } catch {
           return "err";
+        } finally {
+          clearReadyRefs();
         }
       })();
 
@@ -190,9 +204,6 @@ export function DesktopDream() {
         setError("Generation failed — your prompt is saved, try again in a moment");
         if (!generating) setPhase("idle");
       } else {
-        // timeout — but the pipeline is still running in the
-        // background. Surface a gentle message; the user's prompt
-        // is already saved.
         setError("Reactor is slow — your prompt is saved. The world may still be painting in the background.");
         if (!generating) setPhase("idle");
       }
@@ -203,19 +214,18 @@ export function DesktopDream() {
         setTimeout(() => void paintDream(next), 0);
       }
     },
-    [
-      generating,
-      snapshot?.has_image,
-      snapshot?.has_prompt,
-      uploadFile,
-      setImage,
-      setPrompt,
-      start,
-      reset,
-    ],
+    // paintDream no longer depends on `snapshot` — it reads the live
+    // value from `snapshotRef`. The fewer deps, the more stable the
+    // function identity, the less the `dream:loadScene` listener
+    // re-binds. (Audit bug #4.)
+    [generating, uploadFile, setImage, setPrompt, start, reset],
   );
 
-  // Listen for scene-load events from the sidebar.
+  // Listen for scene-load events from the sidebar OR from the share-URL
+  // consumption. Registered ONCE on mount; reads the latest paintDream
+  // from a ref so we don't tear down/rebind on every state update.
+  const paintDreamRef = useRef(paintDream);
+  paintDreamRef.current = paintDream;
   useEffect(() => {
     function onLoad(e: Event) {
       const detail = (e as CustomEvent).detail as
@@ -223,11 +233,25 @@ export function DesktopDream() {
         | undefined;
       if (!detail?.prompt) return;
       setText(detail.prompt);
-      void paintDream(detail.prompt, { seed: detail.seed });
+      void paintDreamRef.current(detail.prompt, { seed: detail.seed });
     }
     window.addEventListener("dream:loadScene", onLoad as EventListener);
     return () => window.removeEventListener("dream:loadScene", onLoad as EventListener);
-  }, [paintDream]);
+  }, []);
+
+  // On mount, if the URL contains a shared dream (`?d=...`), auto-paint
+  // it. This is the entry point for shareable URLs.
+  useEffect(() => {
+    const shared = readDreamFromUrl();
+    if (!shared) return;
+    setText(shared.prompt);
+    // Defer one tick so the SDK is fully wired up.
+    const t = setTimeout(() => {
+      void paintDreamRef.current(shared.prompt, { seed: shared.seed });
+    }, 250);
+    clearDreamFromUrl();
+    return () => clearTimeout(t);
+  }, []);
 
   // Desktop voice: push-to-talk via spacebar OR the mic button. Same
   // engine as mobile (Web Speech API → onFinal → paint). The mic
@@ -269,7 +293,11 @@ export function DesktopDream() {
     };
   }, [voice]);
 
-  // Auto-paint when voice commits a phrase.
+  // Auto-paint when voice commits a phrase. Guarded against the
+  // double-addScene bug: voice.onFinal AND form submit both fire on
+  // the same text if the user types and then talks — the dedupe
+  // (audit bug #7) lives in `useSessions.addScene` which now checks
+  // for a recent identical prompt.
   useEffect(() => {
     if (!voice.supported) return;
     return voice.onFinal((text) => {
@@ -280,12 +308,11 @@ export function DesktopDream() {
       sessions.addScene({ prompt: t, seed });
       void paintDream(t, { seed });
     });
-  }, [voice, sessions, paintDream]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice, sessions]);
 
   // On first ready + no active session, also re-paint the last scene
-  // of the active session if it has one. (The default-scene
-  // auto-paint handles the "first launch" case; this handles the
-  // "open app, your last session is still active" case.)
+  // of the active session if it has one.
   const restoredRef = useRef(false);
   useEffect(() => {
     if (!sessions.hydrated) return;
@@ -293,7 +320,6 @@ export function DesktopDream() {
     const last = sessions.activeSession?.scenes[sessions.activeSession.scenes.length - 1];
     if (last && snapshot?.has_image === false) {
       restoredRef.current = true;
-      // Defer to next tick so the SDK is fully wired up.
       setTimeout(() => {
         setText(last.prompt);
         void paintDream(last.prompt, { seed: last.seed });
@@ -301,23 +327,51 @@ export function DesktopDream() {
     } else {
       restoredRef.current = true;
     }
-  }, [sessions.hydrated, sessions.activeSession, snapshot?.has_image, paintDream]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions.hydrated, sessions.activeSession, snapshot?.has_image]);
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const t = text.trim();
     if (!t) return;
     setText("");
-    // Optimistically save the user's intent immediately. The
-    // "memory" requirement says whatever the user does in a session
-    // is persisted locally — even if Reactor's backend is failing
-    // to produce a preview, the prompt must not be lost. The
-    // paintDream call below will still try to render the scene, but
-    // it's best-effort.
     const seed = hashSeed(t + ":" + sessionNonceRef.current.toString(16)) >>> 0;
     sessions.addScene({ prompt: t, seed });
     void paintDream(t, { seed });
   }
+
+  function onReRoll() {
+    // Re-roll: keep the same prompt, generate a fresh seed.
+    const base = (text.trim() || lastPrompt || "").trim();
+    if (!base) return;
+    // Bump the sessionNonce so hashSeed(text + nonce) yields a new
+    // value. We don't mutate the existing nonce — we fold a counter
+    // into the hash input.
+    const rollNonce = Math.floor(Math.random() * 0xffffffff);
+    const seed = hashSeed(base + ":" + rollNonce.toString(16)) >>> 0;
+    sessions.addScene({ prompt: base, seed });
+    setLastPrompt(base);
+    setLastSeed(seed);
+    setText("");
+    void paintDream(base, { seed });
+  }
+
+  async function onShare() {
+    if (!lastPrompt) return;
+    const seed = lastSeed ?? hashSeed(lastPrompt + ":" + sessionNonceRef.current.toString(16)) >>> 0;
+    const url = buildShareUrl(lastPrompt, seed);
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Fallback: open a prompt the user can copy from.
+      window.prompt("Copy this dream link:", url);
+    }
+  }
+
+  const showHint = !lastPrompt && phase === "idle";
 
   return (
     <div className="pointer-events-auto flex flex-col gap-3" data-testid="desktop-dream">
@@ -338,8 +392,24 @@ export function DesktopDream() {
               ? "Walk with W A S D · look with the mouse"
               : "a sunlit alpine meadow at golden hour, wildflowers, distant snow-capped peaks")}
         </p>
-        {error && <p className="mt-1 text-xs text-red-300">{error}</p>}
+        {error && <p className="mt-1 text-xs text-red-300" role="status" aria-live="polite">{error}</p>}
       </div>
+
+      <div className="flex flex-col gap-2">
+        <ChipStrip
+          chips={STYLE_PRESETS.map((p) => ({ id: p.id, label: p.label, emoji: p.emoji }))}
+          activeId={styleId}
+          onSelect={setStyleId}
+          size="sm"
+        />
+        <ChipStrip
+          chips={TIME_VARIANTS.map((v) => ({ id: v.id, label: v.label, emoji: v.emoji }))}
+          activeId={variantId}
+          onSelect={setVariantId}
+          size="sm"
+        />
+      </div>
+
       <form onSubmit={onSubmit} className="flex gap-2" data-testid="desktop-dream-form">
         <input
           value={text}
@@ -348,6 +418,28 @@ export function DesktopDream() {
           data-testid="desktop-dream-input"
           className="flex-1 rounded-full border border-white/10 bg-black/60 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:border-white/30 focus:outline-none"
         />
+        <button
+          type="button"
+          onClick={onReRoll}
+          disabled={!lastPrompt && !text.trim()}
+          aria-label="Re-roll the same prompt with a new seed"
+          title="Re-roll"
+          data-testid="desktop-reroll-btn"
+          className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-white/10 bg-white/10 text-base text-white/85 transition hover:bg-white/20 disabled:opacity-40"
+        >
+          🎲
+        </button>
+        <button
+          type="button"
+          onClick={onShare}
+          disabled={!lastPrompt}
+          aria-label={copied ? "Link copied" : "Copy a shareable link to this dream"}
+          title={copied ? "Copied!" : "Share"}
+          data-testid="desktop-share-btn"
+          className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-white/10 bg-white/10 text-base text-white/85 transition hover:bg-white/20 disabled:opacity-40"
+        >
+          {copied ? "✓" : "🔗"}
+        </button>
         {voice.supported && (
           <button
             type="button"
@@ -421,19 +513,8 @@ export function DesktopDream() {
   );
 }
 
-const DEFAULT_HINT = "a sunlit alpine meadow at golden hour, wildflowers, distant snow-capped peaks";
-
 function PhaseDot({ phase }: { phase: "idle" | "loading" | "live" }) {
   const color =
     phase === "live" ? "bg-emerald-400" : phase === "loading" ? "bg-amber-400" : "bg-white/30";
   return <span className={`inline-block h-1.5 w-1.5 rounded-full ${color}`} />;
-}
-
-function hashSeed(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
 }

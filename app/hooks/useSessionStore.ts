@@ -15,7 +15,7 @@ export interface UseSessionStore {
   activeSession: Session | null;
   activeSessionId: string | null;
   addScene: (input: { prompt: string; seed: number }) => Scene | null;
-  removeScene: (sceneId: string) => void;
+  removeScene: (sceneId: string, sessionId?: string) => void;
   createSession: (opts?: { title?: string; seed?: { prompt: string; seed: number } | null }) => string;
   loadSession: (sessionId: string) => Scene | null;
   deleteSession: (sessionId: string) => void;
@@ -70,6 +70,16 @@ export function useSessionStoreImpl(): UseSessionStore {
     (input: { prompt: string; seed: number }): Scene | null => {
       const trimmed = input.prompt.trim();
       if (!trimmed) return null;
+      // Dedupe: if the active session already has a scene with the
+      // same prompt within the last 3 seconds, skip the add. This
+      // handles the double-fire pattern where voice.onFinal AND the
+      // form's onSubmit both try to add the same prompt back-to-back
+      // (audit bug #7).
+      const now = Date.now();
+      const dup = sessions.find((s) => s.id === activeId)?.scenes.find(
+        (sc) => sc.prompt === trimmed && now - sc.timestamp < 3000,
+      );
+      if (dup) return null;
       const scene: Scene = {
         id: newSceneId(),
         prompt: trimmed,
@@ -105,12 +115,13 @@ export function useSessionStoreImpl(): UseSessionStore {
   );
 
   const removeScene = useCallback(
-    (sceneId: string) => {
-      setSessions((prev) => {
-        if (!activeId) return prev;
-        return prev
+    (sceneId: string, sessionId?: string) => {
+      const targetId = sessionId ?? activeId;
+      if (!targetId) return;
+      setSessions((prev) =>
+        prev
           .map((s) => {
-            if (s.id !== activeId) return s;
+            if (s.id !== targetId) return s;
             const scenes = s.scenes.filter((sc) => sc.id !== sceneId);
             return {
               ...s,
@@ -119,8 +130,8 @@ export function useSessionStoreImpl(): UseSessionStore {
               updatedAt: Date.now(),
             };
           })
-          .filter((s) => s.scenes.length > 0);
-      });
+          .filter((s) => s.scenes.length > 0),
+      );
     },
     [activeId],
   );

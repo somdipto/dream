@@ -77,12 +77,18 @@ const H = 576;
  * The output is a soft wash of one hue — a degenerate anchor frame that
  * doesn't bias the model toward any specific scene composition. The
  * prompt text alone drives the actual scene.
+ *
+ * Returns `null` when no canvas is available in the current
+ * environment (some privacy-mode browsers, SSR, very old WebViews).
+ * The caller treats null as "no anchor image — try prompt-only".
  */
-export async function generateSeedImage(opts: SeedImageOptions = {}): Promise<Blob> {
+export async function generateSeedImage(opts: SeedImageOptions = {}): Promise<Blob | null> {
   const width = opts.width ?? W;
   const height = opts.height ?? H;
   const seed = opts.seed ?? Math.floor(Math.random() * 0xffffffff);
   const palette = paletteFromString(String(seed));
+
+  if (typeof document === "undefined") return null;
 
   // Use OffscreenCanvas in workers/SSR, regular canvas everywhere else.
   const canvas: OffscreenCanvas | HTMLCanvasElement =
@@ -95,7 +101,9 @@ export async function generateSeedImage(opts: SeedImageOptions = {}): Promise<Bl
     | CanvasRenderingContext2D
     | null;
   if (!ctx) {
-    throw new Error("Canvas 2D context unavailable in this browser");
+    // eslint-disable-next-line no-console
+    console.warn("[dream] Canvas 2D context unavailable — proceeding without anchor image");
+    return null;
   }
 
   // 1. Near-flat vertical gradient — top→bottom within ~5 % lightness,
@@ -118,10 +126,14 @@ export async function generateSeedImage(opts: SeedImageOptions = {}): Promise<Bl
   // scene from here.
 
   if (canvas instanceof OffscreenCanvas) {
-    return canvas.convertToBlob({ type: "image/png" });
+    try {
+      return await canvas.convertToBlob({ type: "image/png" });
+    } catch {
+      return null;
+    }
   }
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), "image/png");
+  return new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((b) => resolve(b), "image/png");
   });
 }
 

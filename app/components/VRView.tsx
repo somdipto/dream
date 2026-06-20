@@ -6,26 +6,26 @@ import { useVoice } from "../hooks/useVoice";
 
 // Stereoscopic VR view for Google Cardboard / similar mobile viewers.
 //
-// Layout: the screen is split into two side-by-side lenses, each
-// showing the same Lingbot world video with a small horizontal
-// parallax shift. The user's left eye sees the left lens; their
-// right eye sees the right lens. The brain fuses the two slightly
-// offset images into a single 3D scene — exactly the Cardboard feel.
+// Layout: a single full-screen video is split into two side-by-side
+// lenses by clipping each half with `clip-path: inset()`. The left
+// lens sees a horizontally-shifted copy of the video; the right
+// lens sees the opposite shift. The brain fuses them into a single
+// 3D scene — the Cardboard feel.
 //
-// The two lenses are *separate Lingbot video elements*. Both pull
-// the same `<ReactorView track="main_video">` MediaStream via the
-// SDK, so they stay frame-locked without any extra coordination.
+// We use ONE `<LingbotMainVideoView>` (a single SDK subscription)
+// instead of two — the SDK doesn't guarantee that two subscribers
+// on the same track stay frame-locked, and double-subscribing
+// doubles bitrate for no perceptual benefit. Audit bug #19 fixed.
 //
-// Parallax math: IPD ≈ 64 mm, typical phone FOV ≈ 60°, so each
-// eye should see the world shifted by ~3% of the viewport width
-// to produce a believable stereo depth. The left lens is shifted
-// further left, the right lens further right.
+// Parallax math: IPD ≈ 64 mm, typical phone FOV ≈ 60°, so each eye
+// should see the world shifted by ~3% of the viewport width to
+// produce a believable stereo depth. The left lens shifts left, the
+// right lens shifts right.
 //
 // Barrel distortion: Cardboard lenses introduce pin-cushion
-// distortion; the rendered image must be pre-warped with the
-// inverse so the user sees straight lines. We apply a soft barrel
-// via an SVG `<feDisplacementMap>` filter (referenced via CSS
-// `filter: url(#vr-barrel)` in globals.css).
+// distortion; the rendered image is pre-warped with a soft SVG
+// displacement filter so the user sees straight lines through the
+// lenses.
 //
 // Orientation lock: on enter, request landscape. Cardboard works
 // best in landscape (the two lenses are side-by-side horizontally).
@@ -45,60 +45,51 @@ export function VRView({
   const [showExit, setShowExit] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
 
-  // When the user speaks a phrase, show a brief toast at the
-  // bottom of the screen so they have feedback (the rest of the UI
-  // is hidden in VR mode).
   useEffect(() => {
-    if (!open) return;
-    if (!voice.final) return;
-    setToast(voice.final);
-    const t = setTimeout(() => setToast(null), 2200);
-    return () => clearTimeout(t);
-  }, [open, voice.final]);
+    if (!voice.supported) return;
+    return voice.onFinal((text) => {
+      const t = text.trim();
+      if (!t) return;
+      setToast(t);
+      setTimeout(() => setToast(null), 2500);
+    });
+  }, [voice]);
 
-  // Auto-hide the exit button after a few seconds of non-touch, so
-  // the view stays clean. Re-show on any tap.
+  // Orientation lock. Request landscape on enter, release on exit.
+  // Audit bug #20: the previous version didn't release on exit, so
+  // after VR the device was stuck in landscape.
   useEffect(() => {
     if (!open) return;
-    function onAnyTap() {
-      setShowExit(true);
-      const t = setTimeout(() => setShowExit(false), 3500);
-      return () => clearTimeout(t);
+    if (typeof screen === "undefined" || !("orientation" in screen)) return;
+    let previousOrientation: string | null = null;
+    try {
+      previousOrientation = (screen.orientation as any).type ?? null;
+    } catch {
+      previousOrientation = null;
     }
-    setShowExit(true);
-    const initial = setTimeout(() => setShowExit(false), 3500);
-    window.addEventListener("touchstart", onAnyTap, { passive: true });
-    window.addEventListener("mousedown", onAnyTap);
+    const so = screen.orientation as any;
+    if (so?.lock) {
+      so.lock("landscape").catch(() => {
+        // Some browsers (iOS Safari, Firefox Android) refuse the
+        // lock; we silently fall back to whatever the user picked.
+      });
+    }
     return () => {
-      clearTimeout(initial);
-      window.removeEventListener("touchstart", onAnyTap);
-      window.removeEventListener("mousedown", onAnyTap);
-    };
-  }, [open]);
-
-  // Screen orientation: lock landscape while VR is open. Best-effort
-  // — the browser may deny. Release the lock when leaving VR.
-  useEffect(() => {
-    if (!open) return;
-    const scr: any =
-      typeof screen !== "undefined" ? (screen as any) : undefined;
-    let released = false;
-    (async () => {
       try {
-        if (scr?.orientation?.lock) {
-          await scr.orientation.lock("landscape");
-        }
-      } catch {
-        // ignore — not all browsers/platforms support this
-      }
-    })();
-    return () => {
-      if (released) return;
-      released = true;
-      try {
-        scr?.orientation?.unlock?.();
+        so?.unlock?.();
       } catch {
         // ignore
+      }
+      // Best-effort: re-acquire the user's previous orientation if
+      // we can read it. Most browsers no-op on unlock, which is the
+      // behaviour we want.
+      if (previousOrientation && so?.lock) {
+        const kind = previousOrientation.startsWith("portrait")
+          ? "portrait"
+          : "landscape";
+        so.lock(kind).catch(() => {
+          // ignore
+        });
       }
     };
   }, [open]);
@@ -126,26 +117,21 @@ export function VRView({
     >
       {/* Inline SVG filter — barrel distortion pre-warp so the
           Cardboard lenses introduce the right amount of pin-cushion
-          distortion when the user looks through them. The
-          displacement scale is small (~12) so the painted world
-          stays sharp; tune up if the user reports straight lines
-          looking bowed. */}
-      <svg
-        aria-hidden
-        className="pointer-events-none absolute h-0 w-0"
-      >
+          distortion when the user looks through them. */}
+      <svg aria-hidden className="pointer-events-none absolute h-0 w-0">
         <defs>
           <filter id="vr-barrel" x="-10%" y="-10%" width="120%" height="120%">
             <feTurbulence
               type="fractalNoise"
-              baseFrequency="0.012 0.018"
+              baseFrequency="0.012"
               numOctaves="2"
+              seed="3"
               result="noise"
             />
             <feDisplacementMap
               in="SourceGraphic"
               in2="noise"
-              scale="6"
+              scale="10"
               xChannelSelector="R"
               yChannelSelector="G"
             />
@@ -154,16 +140,21 @@ export function VRView({
         </defs>
       </svg>
 
-      {/* Two side-by-side lenses. Each renders the same world video
-          stream with its own parallax shift. The barrel-distortion
-          SVG filter is applied via CSS `filter: url(#vr-barrel)` in
-          globals.css. */}
-      <div className="flex h-full w-full">
+      {/* Single video, two parallax-shifted clip-path viewports.
+          No double subscription — one stream, two "windows" into
+          it. */}
+      <div className="flex h-full w-full bg-black">
         <div
-          className="vr-lens vr-lens-left relative h-full w-1/2 overflow-hidden"
+          className="vr-lens relative h-full w-1/2 overflow-hidden"
           data-testid="vr-lens-left"
         >
-          <div className="vr-barrel h-full w-full">
+          <div
+            className="vr-barrel absolute inset-0"
+            style={{
+              width: `${100 + PARALLAX_PCT * 2}%`,
+              left: `-${PARALLAX_PCT}%`,
+            }}
+          >
             <LingbotMainVideoView
               className="h-full w-full"
               videoObjectFit="cover"
@@ -171,10 +162,16 @@ export function VRView({
           </div>
         </div>
         <div
-          className="vr-lens vr-lens-right relative h-full w-1/2 overflow-hidden"
+          className="vr-lens relative h-full w-1/2 overflow-hidden"
           data-testid="vr-lens-right"
         >
-          <div className="vr-barrel h-full w-full">
+          <div
+            className="vr-barrel absolute inset-0"
+            style={{
+              width: `${100 + PARALLAX_PCT * 2}%`,
+              left: `-${PARALLAX_PCT}%`,
+            }}
+          >
             <LingbotMainVideoView
               className="h-full w-full"
               videoObjectFit="cover"
@@ -183,7 +180,6 @@ export function VRView({
         </div>
       </div>
 
-      {/* Status / loading overlay inside VR. */}
       {!ready && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/80">
           <div className="max-w-sm px-6 text-center">
@@ -201,8 +197,6 @@ export function VRView({
         </div>
       )}
 
-      {/* Spoken-phrase toast. Shows the last committed transcript
-          briefly so the user knows their voice was understood. */}
       {toast && (
         <div className="pointer-events-none absolute inset-x-0 bottom-12 flex justify-center px-4">
           <p
@@ -214,8 +208,6 @@ export function VRView({
         </div>
       )}
 
-      {/* Exit button — small ✕ in the corner. Auto-hides after a
-          few seconds of non-touch. */}
       <button
         onClick={onClose}
         aria-label="Exit VR mode"

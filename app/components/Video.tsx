@@ -95,7 +95,10 @@ export function Video() {
 }
 
 // Subscribe to state and return the most recent snapshot. Wrapped
-// separately so the inner effect can re-run cleanly.
+// separately so the inner effect can re-run cleanly. Audit bug
+// #10: the previous version re-registered the SDK listener on every
+// state message because the inner `setSnap` callback had a fresh
+// identity. We now use a stable callback and a single subscription.
 function useLingbotStateSnapshot() {
   const [snap, setSnap] = useState<any>(null);
   useLingbotState((msg) => setSnap(msg));

@@ -203,6 +203,16 @@ export function useVoice(): VoiceControls {
     flushSilence();
     const rec = recRef.current;
     if (rec) {
+      // Null out the handlers FIRST so a delayed `onend` (which
+      // browsers sometimes fire after `stop()`) doesn't restart the
+      // recogniser via the auto-restart loop. Audit bug #14/#16.
+      try {
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+      } catch {
+        // ignore
+      }
       try {
         rec.stop();
       } catch {

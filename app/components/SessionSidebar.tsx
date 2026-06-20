@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useSessions } from "./SessionProvider";
 import type { Session } from "../lib/session-types";
 import { usePlatform } from "../hooks/usePlatform";
+import { CuratedGallery } from "./CuratedGallery";
 
 // Toggleable sidebar showing the user's saved sessions.
 //
@@ -11,31 +12,34 @@ import { usePlatform } from "../hooks/usePlatform";
 //   sits in the top bar (passed in by the parent as `open`).
 // Mobile: bottom sheet, swipe-up to expand. Toggle button in the top bar.
 //
-// When the panel is collapsed (desktop default), it has
-// `pointer-events: none` so it doesn't intercept mouse-look on the
-// canvas. The toggle button has `pointer-events: auto`.
+// The sidebar has two tabs:
+//   - "Sessions" — the user's saved dream journal (default).
+//   - "Discover" — a curated gallery of starting dreams.
 //
-// The list shows sessions sorted newest-first. Click a session →
-// loadSession(id). Each session expands to show its scenes; each scene
-// has a small "remove" button.
+// Audit bugs addressed:
+//   - #24: removeScene now accepts (sessionId, sceneId) so removing a
+//     scene from a non-active session works correctly.
+//   - #25: clicking a session header re-paints its last scene via the
+//     same `dream:loadScene` event the inner scene buttons use.
 
 export interface SessionSidebarProps {
   open: boolean;
   onClose: () => void;
   onSelectScene?: (sessionId: string, sceneId: string) => void;
+  onPickCurated?: (scene: { prompt: string; seed: number }) => void;
 }
 
-export function SessionSidebar({ open, onClose, onSelectScene }: SessionSidebarProps) {
+export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: SessionSidebarProps) {
   const platform = usePlatform();
   const store = useSessions();
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [tab, setTab] = useState<"sessions" | "discover">("sessions");
 
   const isDesktop = platform.isDesktop;
   const sorted = [...store.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
 
   return (
     <>
-      {/* Backdrop — only when open. Clicks close. */}
       {open && (
         <div
           className="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm md:hidden"
@@ -43,7 +47,6 @@ export function SessionSidebar({ open, onClose, onSelectScene }: SessionSidebarP
         />
       )}
 
-      {/* Sidebar panel. */}
       <aside
         className={[
           "fixed z-40 bg-black/85 text-white shadow-2xl backdrop-blur transition-transform",
@@ -57,54 +60,85 @@ export function SessionSidebar({ open, onClose, onSelectScene }: SessionSidebarP
                 open ? "translate-y-0" : "translate-y-full",
               ].join(" "),
         ].join(" ")}
-        // Desktop: only the panel itself (not the toggle) is non-blocking
-        // when collapsed. The toggle is rendered separately.
-        // Mobile: same — toggle is a separate fixed button.
         aria-hidden={!open}
       >
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-          <div>
-            <p className="text-[10px] uppercase tracking-widest text-white/50">
-              Your dreams
-            </p>
-            <p className="text-sm font-medium">{store.sessions.length} session{store.sessions.length === 1 ? "" : "s"}</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setTab("sessions")}
+              className={[
+                "rounded-full px-3 py-1 text-xs font-medium transition",
+                tab === "sessions"
+                  ? "bg-white text-black"
+                  : "border border-white/15 bg-white/5 text-white/80 hover:bg-white/10",
+              ].join(" ")}
+            >
+              Sessions
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("discover")}
+              className={[
+                "rounded-full px-3 py-1 text-xs font-medium transition",
+                tab === "discover"
+                  ? "bg-white text-black"
+                  : "border border-white/15 bg-white/5 text-white/80 hover:bg-white/10",
+              ].join(" ")}
+            >
+              Discover
+            </button>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close sessions"
-            className="min-h-[36px] min-w-[36px] rounded-full border border-white/10 bg-white/5 px-3 text-xs text-white/80 hover:bg-white/10"
+            aria-label="Close"
+            className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/5 text-xs text-white/80 hover:bg-white/10"
           >
-            Close
+            ×
           </button>
         </div>
 
-        <div className="overflow-y-auto px-2 py-2" style={{ maxHeight: "calc(100vh - 64px)" }}>
-          {sorted.length === 0 ? (
-            <p className="px-3 py-8 text-center text-sm text-white/50">
-              No saved dreams yet. Speak a scene and it will save here automatically.
-            </p>
-          ) : (
-            sorted.map((s) => (
-              <SessionCard
-                key={s.id}
-                session={s}
-                isActive={s.id === store.activeSessionId}
-                isExpanded={expanded === s.id}
-                onToggle={() => setExpanded(expanded === s.id ? null : s.id)}
-                onLoad={() => {
-                  store.loadSession(s.id);
-                  onClose();
-                }}
-                onDelete={() => store.deleteSession(s.id)}
-                onRemoveScene={(sceneId) => store.removeScene(sceneId)}
-                onSelectScene={(sceneId) => {
-                  onSelectScene?.(s.id, sceneId);
-                }}
-              />
-            ))
-          )}
-        </div>
+        {tab === "discover" ? (
+          <CuratedGallery
+            onPick={(s) => {
+              onPickCurated?.(s);
+              onClose();
+            }}
+            onClose={() => setTab("sessions")}
+          />
+        ) : (
+          <div className="overflow-y-auto px-2 py-2" style={{ maxHeight: "calc(100vh - 64px)" }}>
+            {sorted.length === 0 ? (
+              <p className="px-3 py-8 text-center text-sm text-white/50">
+                No saved dreams yet. Speak a scene and it will save here automatically.
+              </p>
+            ) : (
+              sorted.map((s) => (
+                <SessionCard
+                  key={s.id}
+                  session={s}
+                  isActive={s.id === store.activeSessionId}
+                  isExpanded={expanded === s.id}
+                  onToggle={() => setExpanded(expanded === s.id ? null : s.id)}
+                  onLoad={() => {
+                    store.loadSession(s.id);
+                    // Re-paint the most recent scene of this session.
+                    // Audit bug #25.
+                    const last = s.scenes[s.scenes.length - 1];
+                    if (last) onSelectScene?.(s.id, last.id);
+                    onClose();
+                  }}
+                  onDelete={() => store.deleteSession(s.id)}
+                  onRemoveScene={(sceneId) => store.removeScene(sceneId, s.id)}
+                  onSelectScene={(sceneId) => {
+                    onSelectScene?.(s.id, sceneId);
+                  }}
+                />
+              ))
+            )}
+          </div>
+        )}
       </aside>
     </>
   );
