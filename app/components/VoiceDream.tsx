@@ -28,6 +28,7 @@ import { recordBlackScreen } from "../lib/black-screen-log";
 import { parseVoiceStyle } from "../lib/voice-style-parser";
 import { captureCurrentFrame } from "../lib/pose-lock";
 import { pickSurprisePrompt } from "../lib/surprise-prompts";
+import { setDirectorState } from "../lib/director-state";
 
 // The single hero surface of the app.
 //
@@ -623,7 +624,7 @@ export function VoiceDream() {
           activeId={styleId}
           onSelect={(id) => {
             setStyleId(id);
-            import("../lib/director-state").then((m) => m.setDirectorState({ styleId: id }));
+            setDirectorState({ styleId: id });
           }}
           size="sm"
           dimmedIds={variantId && variantId !== "none" ? conflictingPresets : null}
@@ -634,7 +635,7 @@ export function VoiceDream() {
           activeId={variantId}
           onSelect={(id) => {
             setVariantId(id);
-            import("../lib/director-state").then((m) => m.setDirectorState({ variantId: id }));
+            setDirectorState({ variantId: id });
           }}
           size="sm"
           dimmedIds={styleId ? conflictingVariants : null}

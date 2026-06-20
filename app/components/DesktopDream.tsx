@@ -27,6 +27,7 @@ import { dreamBus } from "../lib/event-bus";
 import { parseVoiceStyle } from "../lib/voice-style-parser";
 import { captureCurrentFrame } from "../lib/pose-lock";
 import { pickSurprisePrompt } from "../lib/surprise-prompts";
+import { setDirectorState } from "../lib/director-state";
 
 // Desktop equivalent of VoiceDream. Same paint pipeline (reset →
 // fresh seed image → setImage → setPrompt → start) but driven by a
@@ -592,7 +593,7 @@ export function DesktopDream() {
             setStyleId(id);
             // QA6/F2: mirror to the Director overlay so the
             // CSS cinema filter kicks in immediately.
-            import("../lib/director-state").then((m) => m.setDirectorState({ styleId: id }));
+            setDirectorState({ styleId: id });
           }}
           size="sm"
           dimmedIds={variantId && variantId !== "none" ? conflictingPresets : null}
@@ -603,7 +604,7 @@ export function DesktopDream() {
           activeId={variantId}
           onSelect={(id) => {
             setVariantId(id);
-            import("../lib/director-state").then((m) => m.setDirectorState({ variantId: id }));
+            setDirectorState({ variantId: id });
           }}
           size="sm"
           dimmedIds={styleId ? conflictingVariants : null}

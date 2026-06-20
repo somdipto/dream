@@ -5,6 +5,7 @@ import { LingbotProvider, useLingbot } from "@reactor-models/lingbot";
 import { Video } from "./components/Video";
 import { DirectorOverlay } from "./components/DirectorOverlay";
 import { PromptTrail } from "./components/PromptTrail";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { StatusBadge } from "./components/StatusBadge";
 import { CommandError } from "./components/CommandError";
 import { VoiceDream } from "./components/VoiceDream";
@@ -1471,14 +1472,22 @@ function DreamSurface() {
       {hasBegun && !vrMode && <PromptTrail />}
       {sidebar}
       <CursorEmbed />
+      {/* QA9/F8: Error boundary catches render errors
+          in the dream chrome (Director filter, paint
+          chip) without taking down the whole app. The
+          inner boundary on the Dream component catches
+          paint-specific crashes so the user can still
+          open the sidebar to grab their saved sessions. */}
       {/* Video fills the screen as background. */}
       <div className="fixed inset-0 z-0">
-        <Video />
-        {/* QA6/F2: Director overlay — CSS cinema filter that
-            reacts to chip clicks. Sits inside the z-0
-            container so it composites with the video but
-            doesn't intercept pointer events. */}
-        <DirectorOverlay />
+        <ErrorBoundary label="Dream canvas">
+          <Video />
+          {/* QA6/F2: Director overlay — CSS cinema filter that
+              reacts to chip clicks. Sits inside the z-0
+              container so it composites with the video but
+              doesn't intercept pointer events. */}
+          <DirectorOverlay />
+        </ErrorBoundary>
       </div>
 
       {/* Virtual joystick fallback — rendered ABOVE the video and
