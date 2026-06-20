@@ -83,6 +83,13 @@ export function classifyReactorError(message: string | null | undefined): Classi
   if (m.includes("503") || m.includes("service unavailable") || m.includes("temporarily unavailable")) {
     return { ...KNOWN.service_unavailable };
   }
+  // M9.7: the server's key-pool returns 503 with this exact message
+  // when every configured key is parked. Treat as service_unavailable
+  // so the user sees the friendly "Reactor is temporarily unavailable"
+  // copy instead of the generic "Something went wrong".
+  if (m.includes("all api keys are temporarily exhausted") || m.includes("all api keys failed")) {
+    return { ...KNOWN.service_unavailable };
+  }
   return {
     reason: "unknown",
     title: "Something went wrong",
