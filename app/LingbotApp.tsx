@@ -198,6 +198,38 @@ function DreamSurface() {
     return () => clearTimeout(t);
   }, [status, hasBegun, lastError, connect]);
 
+  // M9.11: "stuck" detection — if the SDK is taking longer than 8s
+  // to either connect or surface an error, give the user an escape
+  // hatch to manually rotate to a fresh key. This is the proactive
+  // counterpart to the 402 error screen's "Try a different key"
+  // button — for the case where the API isn't returning a
+  // classified error at all, just hanging.
+  const connectingSinceRef = useRef<number | null>(null);
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const isConnectingLike =
+      status === "connecting" || status === "waiting" || status === "disconnected";
+    if (isConnectingLike && hasBegun) {
+      if (connectingSinceRef.current === null) {
+        connectingSinceRef.current = Date.now();
+      }
+      const t = setTimeout(() => setStuck(true), 8000);
+      return () => clearTimeout(t);
+    }
+    // Successful connection or user backed out — clear stuck flag.
+    connectingSinceRef.current = null;
+    setStuck(false);
+    return;
+  }, [status, hasBegun]);
+
+  const onTryDifferentKey = useCallback(() => {
+    // M9.8 bust flag + reconnect. The cached 6-hour JWT (if any) is
+    // skipped, so the SDK mints a fresh token from the next healthy
+    // key in the M9.7 server pool.
+    bustNextToken();
+    void connect();
+  }, [connect]);
+
   // Before Begin: friendly landing overlay. Pure black per the
   // M9.6 design pass — the user prefers a clean, quiet landing
   // surface. The aurora gradient still lives on the *connecting*
@@ -464,6 +496,16 @@ function DreamSurface() {
                   className="mt-6 rounded-full bg-white/15 px-5 py-2 text-sm font-medium text-white hover:bg-white/25"
                 >
                   Try again
+                </button>
+              )}
+              {!lastError && stuck && (
+                <button
+                  type="button"
+                  onClick={onTryDifferentKey}
+                  data-testid="connect-stuck-rotate-key"
+                  className="mt-6 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-5 py-2 text-xs font-medium text-white/85 hover:bg-white/15"
+                >
+                  Try a different key
                 </button>
               )}
               <button
