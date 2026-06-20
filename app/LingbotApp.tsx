@@ -249,7 +249,7 @@ function DreamSurface() {
             </p>
           )}
         </div>
-        <div className="pointer-events-auto flex items-center gap-2">
+        <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={() => {
               // "New session" — keep the current world running, just
@@ -261,14 +261,15 @@ function DreamSurface() {
             data-testid="new-session-btn"
             className="rounded-full border border-emerald-400/40 bg-emerald-500/20 px-3 py-1.5 text-xs text-emerald-100 backdrop-blur hover:bg-emerald-500/30"
           >
-            + New session
+            {platform.isMobile ? "+ New" : "+ New session"}
           </button>
           <button
             onClick={handleReset}
             aria-label="Start over"
+            data-testid="reset-btn"
             className="min-h-[40px] rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-xs text-white/80 backdrop-blur hover:bg-black/60"
           >
-            Reset
+            {platform.isMobile ? "↻" : "Reset"}
           </button>
           {platform.isMobile && (
             <button
