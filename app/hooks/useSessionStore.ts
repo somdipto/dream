@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   deriveTitle,
   newSceneId,
@@ -48,6 +48,14 @@ export function useSessionStoreImpl(): UseSessionStore {
   const [pruneNotice, setPruneNotice] = useState(0);
   const [hydrated, setHydrated] = useState(false);
   const [recoveryNotice, setRecoveryNotice] = useState(false);
+  // Mirror of `sessions` for read-only use in stable callbacks
+  // (notably setActive's id validation). Avoids the need to thread
+  // `sessions` into the dep array, which would change the callback
+  // identity every state update and force every consumer to re-run.
+  const sessionsRef = useRef<Session[]>([]);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   useEffect(() => {
     const r = loadFromStorage();
@@ -93,8 +101,15 @@ export function useSessionStoreImpl(): UseSessionStore {
       // AND the form's onSubmit both try to add the same prompt
       // back-to-back (audit bug #7), AND it tolerates intentional
       // re-rolls (different seed).
+      //
+      // Read from `sessionsRef` (not closure-captured `sessions`) so
+      // two addScene calls in the same render both see the latest
+      // list. Without this, call A inserts a scene, call B's
+      // closure still has the pre-A list, and B's dup check fails
+      // to see A's scene — letting a duplicate through.
       const now = Date.now();
-      const dup = sessions.find((s) => s.id === activeId)?.scenes.find(
+      const live = sessionsRef.current;
+      const dup = live.find((s) => s.id === activeId)?.scenes.find(
         (sc) => sc.prompt === trimmed && sc.seed === seed && now - sc.timestamp < 3000,
       );
       if (dup) return null;
@@ -129,7 +144,7 @@ export function useSessionStoreImpl(): UseSessionStore {
       });
       return scene;
     },
-    [activeId, sessions],
+    [activeId],
   );
 
   const removeScene = useCallback(
@@ -180,15 +195,15 @@ export function useSessionStoreImpl(): UseSessionStore {
     [],
   );
 
-  const loadSession = useCallback(
-    (sessionId: string): Scene | null => {
-      const target = sessions.find((s) => s.id === sessionId);
-      if (!target) return null;
-      setActiveId(sessionId);
-      return target.scenes[target.scenes.length - 1] ?? null;
-    },
-    [sessions],
-  );
+  const loadSession = useCallback((sessionId: string): Scene | null => {
+    // Read from sessionsRef so consecutive calls within the same
+    // render see the latest list. (The previous closure-captured
+    // `sessions` would lag by one render in that case.)
+    const target = sessionsRef.current.find((s) => s.id === sessionId);
+    if (!target) return null;
+    setActiveId(sessionId);
+    return target.scenes[target.scenes.length - 1] ?? null;
+  }, []);
 
   const deleteSession = useCallback((sessionId: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
@@ -229,31 +244,27 @@ export function useSessionStoreImpl(): UseSessionStore {
     // a known-bad value and the next render shows `activeSession`
     // as null with no signal to the user. Allow null explicitly —
     // that's how callers deselect.
-    if (sessionId !== null) {
-      // Read the latest sessions list via a functional setter so we
-      // don't depend on a closure-captured `sessions` value.
-      setSessions((prev) => {
-        if (prev.some((s) => s.id === sessionId)) {
-          // Found — commit the activeId change. (We can't call
-          // setActiveId here because we're inside a setter; do it
-          // after this microtask.)
-          queueMicrotask(() => setActiveId(sessionId));
-        } else {
-          // Stale id — log and no-op so the journal doesn't get
-          // accidentally re-rooted to a non-existent session.
-          // eslint-disable-next-line no-console
-          console.warn(
-            "[dream] setActive: session not found, ignoring:",
-            sessionId,
-          );
-        }
-        // Always return prev unchanged — this setter exists only for
-        // its side effect of validating the id.
-        return prev;
-      });
+    //
+    // We read the latest sessions list from `sessionsRef` rather
+    // than abusing `setSessions` as a side-effect setter (the
+    // previous M9.4 implementation did this; the issue was that
+    // re-rendering setSessions with an unchanged value still
+    // triggers a state update and would be a no-op cycle).
+    if (sessionId === null) {
+      setActiveId(null);
       return;
     }
-    setActiveId(null);
+    if (sessionsRef.current.some((s) => s.id === sessionId)) {
+      setActiveId(sessionId);
+      return;
+    }
+    // Stale id — log and no-op so the journal doesn't get
+    // accidentally re-rooted to a non-existent session.
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[dream] setActive: session not found, ignoring:",
+      sessionId,
+    );
   }, []);
 
   const restoreBackup = useCallback((): boolean => {
