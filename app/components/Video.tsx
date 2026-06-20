@@ -12,7 +12,7 @@ import {
 // `srcObject`, no autoplay tricks.
 //
 // CRITICAL: the user has reported seeing a black/blank screen while
-// prompting. There are three distinct failure modes this guards against:
+// prompting. There are four distinct failure modes this guards against:
 //
 //   1. **Pre-paint gap** — between user input and LingBot's first
 //      chunk arriving. The aurora fills this.
@@ -23,6 +23,13 @@ import {
 //      prompts produce a stream where every frame is near-black. The
 //      canvas-sampling watchdog detects this and re-engages the
 //      aurora at low opacity so the user sees *something*.
+//   4. **The pre-video base color** — between Begin and the first
+//      frame, the user sees the <Video> container's background. The
+//      old base was #0a0612 (deep purple-black) which read as "the
+//      app is broken" on screens where the aurora gradient was
+//      washed out. M9.13 changes the base to a soft warm cream so
+//      even if the video never paints, the user sees a friendly
+//      surface — not a void.
 //
 // Aurora layering rules:
 //   - During loading/ready/generating → aurora fully visible (text
@@ -96,11 +103,13 @@ export function Video() {
       setAuroraOpacity(1);
     } else if (darkFrames) {
       // Dark-frame watchdog tripped — aurora peeks through stronger.
-      setAuroraOpacity(0.7);
+      setAuroraOpacity(0.75);
     } else {
-      // Safety net: always 30% so a sudden black frame doesn't
-      // render the page completely dark.
-      setAuroraOpacity(0.3);
+      // M9.13: bumped the safety net from 30% → 45%. The user
+      // reported "blank dark black screen" — even a brief drop to
+      // dark video frames reads as broken. 45% is bright enough
+      // to clearly tint the screen without dominating the video.
+      setAuroraOpacity(0.45);
     }
   }, [phase, paintGraceUntil, now, darkFrames]);
 
@@ -160,7 +169,14 @@ export function Video() {
   const showOverlay = phase !== "playing" || now < paintGraceUntil;
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-[#0a0612]">
+    // M9.13: the old `bg-[#0a0612]` (deep purple-black) was
+    // responsible for the user's "blank black screen" report. Even
+    // with the aurora layered on top, low-saturation screens showed
+    // through to this base color and read as a void. Soft warm cream
+    // (`#fef3e8`) is a "better than black" fallback: if the video
+    // never paints, the user sees a friendly daylight surface, not
+    // a black hole. The aurora gradient still tints it on top.
+    <div className="relative h-full w-full overflow-hidden bg-[#fef3e8]">
       {/* Aurora background — ALWAYS present (opacity-controlled),
           not toggled in/out. The video stage sits on top. LingBot's
           first chunks can be near-black, so we keep the aurora

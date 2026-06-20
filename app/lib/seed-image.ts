@@ -47,15 +47,17 @@ export function hash32(s: string): number {
 /** Pick a near-monochrome palette deterministically from a string. */
 export function paletteFromString(s: string): SeedPalette {
   const h = hash32(s || String(Math.random()));
-  // Bright base: lightness 70-80, saturation 45-60. The model anchors
-  // to the seed image's colour — a near-flat DARK gradient was making
-  // every hyperreal preset land as a moody night shot. Keep the
-  // gradient subtle (top→bottom 5% lightness) but push the absolute
-  // brightness into a daylight range so the model anchors brighter.
+  // M9.13: bumped further into daylight (lightness 84-90, low
+  // saturation 25-40) so the model anchors a SUNLIT base scene
+  // rather than twilight. A dark seed image biases every prompt
+  // toward a moody shot, which is exactly what the user reported
+  // as "blank dark black screen". The seed is a wash of pale
+  // warm color — not a flat white (that produces blown-out
+  // highlights), not a flat color (that produces banding).
   const base = h % 360;
   return {
-    top: hsl(base, 50, 78),
-    bottom: hsl((base + 15 + (h >> 8) % 15) % 360, 45, 72),
+    top: hsl(base, 30, 88),
+    bottom: hsl((base + 15 + (h >> 8) % 15) % 360, 28, 84),
   };
 }
 
