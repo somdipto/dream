@@ -35,7 +35,7 @@ const DEAD_ZONE = 0.12; // 12% of half-viewport → no rotation
 const MAX_ROT_DIST = 0.6; // 60% of half-viewport → max rotation speed
 
 export function DesktopController({ enabled }: { enabled: boolean }) {
-  const { setMovement, setLookHorizontal, setLookVertical, setRotationSpeedDeg } = useLingbot();
+  const { setMovement, setLookHorizontal, setLookVertical, setRotationSpeedDeg, status } = useLingbot();
 
   const keysRef = useRef<Set<string>>(new Set());
   const mouseRef = useRef({ x: 0, y: 0 }); // -1..1, 0=center
@@ -111,6 +111,10 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
 
   // --- Centralized state → SDK tick. Called on every key/mouse change. ---
   function tick() {
+    // Skip sending commands while the SDK is not ready. Lingbot
+    // rejects commands with "cannot send command while status is
+    // disconnect must be ready" otherwise.
+    if (status !== "ready") return;
     // 1. Movement. WASD wins. Arrow keys share the same slot for
     //    movement so the keyboard layout stays intuitive (↑ = forward,
     //    ↓ = back).
@@ -179,13 +183,17 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
 
   // Reset all axes when the controller unmounts (e.g. leaving the
   // desktop layout) so we don't leave the model stuck walking forever.
+  // CRITICAL: only send the reset if the SDK is still ready. Sending
+  // commands while disconnected throws "cannot send command while
+  // status is disconnect must be ready" — see REA-1847.
   useEffect(() => {
     return () => {
+      if (status !== "ready") return;
       void setMovement({ movement: "idle" });
       void setLookHorizontal({ look_horizontal: "idle" });
       void setLookVertical({ look_vertical: "idle" });
     };
-  }, [setMovement, setLookHorizontal, setLookVertical]);
+  }, [status, setMovement, setLookHorizontal, setLookVertical]);
 
   // Show a small HUD on desktop so the user knows the controls exist.
   // Kept unobtrusive — bottom-right, fades on first key press.

@@ -352,8 +352,22 @@ function DesktopDefaultScene({
       try {
         const seed = Math.floor(Math.random() * 0xffffffff);
         const blob = await generateSeedImage({ seed });
-        const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
-        await setImage({ image: ref });
+        // Race the seed-image upload against 5s. If Reactor's upload
+        // slot is stuck (very common in practice — the demo queue
+        // backs up), fall through to a prompt-only paint so the user
+        // still sees a world. The seed image is an anchor, not a
+        // hard requirement.
+        const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
+        const uploadTimeout = new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), 5000),
+        );
+        const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
+        if (ref) {
+          await setImage({ image: ref });
+        } else {
+          // eslint-disable-next-line no-console
+          console.warn("[dream] default scene seed upload timed out — painting without anchor");
+        }
         await setPrompt({ prompt: composeScenePrompt({ text: prompt, isFirst: true }) });
         await start();
         // Save the default as the first scene of the active session.

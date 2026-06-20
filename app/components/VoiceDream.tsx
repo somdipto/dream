@@ -146,14 +146,27 @@ export function VoiceDream() {
         //    - same prompt, two different sessions → two different images
         //    - different prompts, same session → two different images
         const blob = await generateSeedImage({ seed });
-        const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
+        // Race the upload against 5s. If Reactor's upload slot is
+        // stuck, skip the seed image and start from the prompt only —
+        // the model still produces a world. The seed image is a
+        // visual anchor, not a hard requirement.
+        const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
+        const uploadTimeout = new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), 5000),
+        );
+        const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
 
         // 3. setImage, then wait for image_accepted.
-        const imageReady = new Promise<void>((resolve) => {
-          imageReadyRef.current = resolve;
-        });
-        await setImage({ image: ref });
-        await imageReady;
+        if (ref) {
+          const imageReady = new Promise<void>((resolve) => {
+            imageReadyRef.current = resolve;
+          });
+          await setImage({ image: ref });
+          await imageReady;
+        } else {
+          // eslint-disable-next-line no-console
+          console.warn("[dream] seed upload timed out — painting without anchor image");
+        }
 
         // 4. Compose the prompt from the user's words + a stable camera
         //    grammar (the model needs the camera scaffolding or the

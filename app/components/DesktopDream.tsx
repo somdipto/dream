@@ -108,12 +108,28 @@ export function DesktopDream() {
             await resetDone;
           }
           const blob = await generateSeedImage({ seed });
-          const ref = await uploadFile(blob, { name: `seed-${seed}.png` });
-          const imageReady = new Promise<void>((resolve) => {
-            imageReadyRef.current = resolve;
+          // Race the upload against a 5s wall clock. If Reactor's
+          // upload slot is stuck (the most common failure mode in
+          // practice — `createUpload` POSTs can hang for tens of
+          // seconds when the demo queue is busy), skip the image
+          // and let the model start from a prompt-only state. The
+          // world is still generated; the seed image just provides
+          // a visual anchor.
+          const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
+          const uploadTimeout = new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), 5000);
           });
-          await setImage({ image: ref });
-          await imageReady;
+          const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
+          if (ref) {
+            const imageReady = new Promise<void>((resolve) => {
+              imageReadyRef.current = resolve;
+            });
+            await setImage({ image: ref });
+            await imageReady;
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn("[dream] seed upload timed out — painting without anchor image");
+          }
           const prompt = composeScenePrompt({ text, isFirst: !snapshot?.has_prompt });
           const conditionsReady = new Promise<void>((resolve) => {
             conditionsReadyRef.current = resolve;

@@ -34,12 +34,14 @@ export interface MotionControls extends MotionTilt {
 }
 
 // ponytail: thresholds tuned for phone-as-controller.
-// - 30° forward: comfortable hold already ~30-40° pitched, so 25° triggered
-//   false walks while the user just held the phone naturally.
+// - 38° forward: a user holding the phone at rest naturally reads
+//   30-40° pitch, so anything below 38° should be "at rest", not
+//   "walking". The user must deliberately tip the phone further
+//   forward to walk — exactly what they want per feedback.
 // - 12° lookV: gentle enough that wrist tremor doesn't fire constant look-down.
 // - 3° pitch / 2° yaw deadzone: suppresses wrist micro-tremor.
-const FORWARD_THRESHOLD_DEG = 30;
-const BACKWARD_THRESHOLD_DEG = -30;
+const FORWARD_THRESHOLD_DEG = 38;
+const BACKWARD_THRESHOLD_DEG = -35;
 const LOOK_H_THRESHOLD_DEG = 15;
 const LOOK_V_PITCH_LOW = 12;
 const LOOK_V_PITCH_HIGH = -10;
