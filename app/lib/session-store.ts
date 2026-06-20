@@ -65,12 +65,21 @@ export function loadFromStorage(): LoadResult {
     return { sessions: [], activeId: null, recovered: true };
   }
   const sessions = extractSessions(parsed);
-  if (sessions.length === 0 && parsed && typeof parsed === "object") {
-    // Storage had *something* but nothing parsed out — also a recovery
-    // signal (schema drift, partial write, etc.).
+  // Only treat as "recovered" if the parsed shape had a recognizable
+  // sessions array but yielded zero results. An empty-but-valid
+  // `{ version:1, sessions: [] }` (user deleted everything) must NOT
+  // surface a recovery banner — that's a clean-slate device.
+  const hadSessionsKey =
+    parsed && typeof parsed === "object" && Array.isArray((parsed as any).sessions);
+  if (sessions.length === 0 && hadSessionsKey) {
+    // Storage had a sessions array but nothing parsed out — partial
+    // write or schema drift. Back up the raw blob so the user has
+    // a chance to recover it from devtools.
     try {
+      // Use a monotonic counter + Date.now() so multiple corruption
+      // events within the same millisecond don't collide.
       window.localStorage.setItem(
-        `${CORRUPT_BACKUP_KEY}.${Date.now()}`,
+        `${CORRUPT_BACKUP_KEY}.${Date.now()}.${Math.floor(Math.random() * 1e6)}`,
         raw.slice(0, 100_000),
       );
       recovered = true;
@@ -89,10 +98,14 @@ export function loadFromStorage(): LoadResult {
 }
 
 function extractSessions(parsed: any): Session[] {
-  if (!parsed || typeof parsed !== "object") return [];
-  // Accept either the new { version, sessions } shape or a bare array
-  // (for forward-compat with older builds).
-  const arr = Array.isArray(parsed) ? parsed : parsed.sessions;
+  // Accept either a bare array (legacy / forward-compat) or
+  // `{ version, sessions }`. Previously the bare-array branch was
+  // commented but never implemented.
+  const arr = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object"
+      ? (parsed as any).sessions
+      : null;
   if (!Array.isArray(arr)) return [];
   const out: Session[] = [];
   for (const item of arr) {

@@ -11,12 +11,15 @@ import { DesktopController } from "./components/DesktopController";
 import { DesktopDream } from "./components/DesktopDream";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { VRView } from "./components/VRView";
+import { VirtualJoystick } from "./components/VirtualJoystick";
 import { SessionProvider, useSessions } from "./components/SessionProvider";
 import { useMotion } from "./hooks/useMotion";
 import { useVoice } from "./hooks/useVoice";
 import { usePlatform } from "./hooks/usePlatform";
 import { generateSeedImage } from "./lib/seed-image";
 import { composeScenePrompt } from "./lib/scene-composer";
+import { dailyDream, dailyDreamTitle } from "./lib/curated-scenes";
+import { dreamBus } from "./lib/event-bus";
 
 async function fetchToken(): Promise<string> {
   const r = await fetch("/api/reactor/token");
@@ -81,15 +84,16 @@ function DreamSurface() {
       if (voice.supported && !voice.listening) {
         try {
           voice.start();
-        } catch {
-          // fallback handled by VoiceDream
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn("[dream] voice.start() during Begin:", e);
         }
       }
       if (typeof screen !== "undefined" && "orientation" in screen) {
         try {
           (screen.orientation as any).lock?.("portrait");
         } catch {
-          // ignore
+          // iOS Safari throws on user-preference locks; harmless.
         }
       }
     }
@@ -97,36 +101,79 @@ function DreamSurface() {
     if (status === "disconnected") {
       void connect();
     }
-  }, [platform.isMobile, motion, voice, status, connect]);
+    // Daily Dream auto-pick: on a fresh device (no saved sessions),
+    // surface today's curated scene so the user sees something
+    // interesting the moment they tap Begin. Skip if there's a share
+    // URL in flight (readDreamFromUrl takes precedence) or if the
+    // user has saved sessions they'd prefer to revisit.
+    if (sessions.hydrated && sessions.sessions.length === 0) {
+      if (typeof window !== "undefined" && !window.location.search.includes("d=")) {
+        const dream = dailyDream();
+        // Defer one tick so the Dream component has time to mount
+        // its event-bus listener.
+        setTimeout(() => {
+          // Create a daily-dream session so the user's journal
+          // starts with something to revisit.
+          const id = sessions.createSession({
+            title: dailyDreamTitle(),
+            seed: { prompt: dream.prompt, seed: dream.seed },
+          });
+          void id;
+          dreamBus.emit("dream:loadScene", { prompt: dream.prompt, seed: dream.seed });
+        }, 200);
+      }
+    }
+    // Depend on stable primitives only. `motion` and `voice` are objects
+    // whose identity changes per render; pinning them caused
+    // handleBegin to be a new function every render, which forced the
+    // Begin button to re-render and re-bind listeners unnecessarily.
+  }, [
+    platform.isMobile,
+    motion.permission,
+    motion.requestPermission,
+    voice.supported,
+    voice.listening,
+    voice.start,
+    status,
+    connect,
+    sessions.hydrated,
+    sessions.sessions.length,
+    sessions.createSession,
+  ]);
 
   const handleReset = useCallback(() => {
+    // Order matters: clear voice + reset BEFORE disconnect so the
+    // SDK teardown doesn't race against voice recogniser shutdown.
     if (platform.isMobile) {
       voice.stop();
+      voice.reset();
     }
     void disconnect();
     setHasBegun(false);
-    if (platform.isMobile) {
-      voice.reset();
-    }
-  }, [disconnect, voice, platform.isMobile]);
+  }, [disconnect, voice.stop, voice.reset, platform.isMobile]);
 
   // Auto-retry once on transient disconnect (hackathon wifi is flaky).
-  // Bug #3: the previous version re-fired whenever `lastError` changed
-  // reference, queuing overlapping reconnect attempts. We gate on a
-  // boolean ref so we attempt exactly one reconnect per disconnect.
+  // The previous version reset `reconnectingRef.current = false` in
+  // the cleanup path, which fired on every dep change. If `status`
+  // flipped `disconnected → connecting` mid-timeout, the cleanup
+  // cleared the ref and a subsequent disconnect would refire the
+  // reconnect — breaking the "one reconnect per disconnect" guarantee.
+  // We now only clear the ref on success (status → ready) or on
+  // explicit hasBegun change.
   const reconnectingRef = useRef(false);
   useEffect(() => {
+    if (status === "ready") {
+      // Successful transition — allow a future disconnect to retry.
+      reconnectingRef.current = false;
+      return;
+    }
     if (status !== "disconnected" || !hasBegun || !lastError) return;
     if (reconnectingRef.current) return;
     reconnectingRef.current = true;
     const t = setTimeout(() => {
-      reconnectingRef.current = false;
       void connect();
     }, 1500);
-    return () => {
-      clearTimeout(t);
-      reconnectingRef.current = false;
-    };
+    return () => clearTimeout(t);
   }, [status, hasBegun, lastError, connect]);
 
   // Before Begin: friendly landing overlay.
@@ -135,7 +182,10 @@ function DreamSurface() {
       <main className="relative grid min-h-screen place-items-center bg-black p-6 text-white">
         {/* Recovery banner — surfaces if the previous storage blob was
             unreadable. Gives the user a chance to restore before we
-            silently lose the journal. (Audit bug #30.) */}
+            silently lose the journal. (Audit bug #30.)
+            The × button now requires a confirm tap before discarding
+            so the user doesn't accidentally nuke their recoverable
+            data with a single misclick. */}
         {sessions.recoveryNotice && (
           <div
             role="alert"
@@ -149,19 +199,27 @@ function DreamSurface() {
               </span>
               <button
                 type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Discard the recoverable snapshot? This can't be undone.",
+                    )
+                  ) {
+                    sessions.dismissRecovery();
+                  }
+                }}
+                className="rounded-full border border-amber-400/30 px-3 py-1 text-amber-100 hover:bg-amber-500/20"
+                data-testid="recovery-discard-btn"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
                 onClick={() => sessions.restoreBackup()}
                 className="rounded-full bg-amber-300 px-3 py-1 font-medium text-amber-950 hover:bg-amber-200"
                 data-testid="recovery-restore-btn"
               >
                 Restore
-              </button>
-              <button
-                type="button"
-                onClick={() => sessions.dismissRecovery()}
-                aria-label="Dismiss recovery notice"
-                className="text-amber-200/80 hover:text-amber-100"
-              >
-                ×
               </button>
             </div>
           </div>
@@ -175,6 +233,17 @@ function DreamSurface() {
               ? "A first scene paints itself. Then describe a new dream, or walk with W A S D and look with the mouse."
               : "Say a scene out loud. Tilt to walk through it. Every phrase you speak mutates the world in place."}
           </p>
+          {/* Daily Dream — a deterministic curated pick from today's
+              date. Surfaces as a "today's pick" chip below the
+              description so the user knows what they'll see first. */}
+          {sessions.sessions.length === 0 && (
+            <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] text-white/80">
+              <span aria-hidden="true">☀</span>
+              <span>
+                Today's dream · {dailyDream().emoji} {dailyDream().id.replace(/-/g, " ")}
+              </span>
+            </div>
+          )}
           {sessions.sessions.length > 0 && (
             <p className="mt-2 text-xs text-emerald-300">
               {sessions.sessions.length} saved dream{sessions.sessions.length === 1 ? "" : "s"} on this device.
@@ -195,7 +264,9 @@ function DreamSurface() {
     );
   }
 
-  // Connecting: brief overlay between Begin and Connected.
+  // Connecting: brief overlay between Begin and Connected. We track
+  // a "has begun connecting" flag so the initial 100ms post-Begin
+  // render doesn't flash a "disconnected" overlay.
   if (status === "disconnected" || status === "connecting" || status === "waiting") {
     return (
       <main className="relative grid min-h-screen place-items-center bg-black p-6 text-white">
@@ -237,6 +308,16 @@ function DreamSurface() {
         <Video />
       </div>
 
+      {/* Virtual joystick fallback — rendered ABOVE the video and
+          BELOW the top/bottom bars. Only shown on mobile when motion
+          permission was denied (or is unsupported). The user can
+          drag the screen to look and drag down to walk forward. */}
+      {platform.isMobile &&
+        !vrMode &&
+        (motion.permission === "denied" || motion.permission === "unsupported") && (
+          <VirtualJoystick enabled={status === "ready"} />
+        )}
+
       {/* Sidebar — sits above the canvas. Toggle button is always visible. */}
       <SessionSidebar
         open={sidebarOpen}
@@ -248,20 +329,17 @@ function DreamSurface() {
           if (sc) {
             sessions.setActive(sessionId);
             // The Dream component re-runs the last scene on active-session
-            // change. We forward the prompt via a custom event the
-            // Dream component listens for.
-            window.dispatchEvent(
-              new CustomEvent("dream:loadScene", { detail: { prompt: sc.prompt, seed: sc.seed } }),
-            );
+            // change. We forward the prompt via a typed event bus that
+            // only our own modules can emit on — no global window event
+            // for browser extensions to hijack.
+            dreamBus.emit("dream:loadScene", { prompt: sc.prompt, seed: sc.seed });
           }
           setSidebarOpen(false);
         }}
         onPickCurated={(s) => {
           // Curated gallery: also dispatch the same load event so the
           // current Dream component re-paints with the curated seed.
-          window.dispatchEvent(
-            new CustomEvent("dream:loadScene", { detail: { prompt: s.prompt, seed: s.seed } }),
-          );
+          dreamBus.emit("dream:loadScene", { prompt: s.prompt, seed: s.seed });
         }}
       />
 

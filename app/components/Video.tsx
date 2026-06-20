@@ -99,10 +99,12 @@ export function Video() {
           LingBot can be near-black; a hard cut from aurora to black
           video reads as "did I just break it?" */}
       <div
+        data-testid="video-stage"
         className={[
           "absolute inset-0 transition-opacity duration-700 ease-out",
           phase === "playing" ? "opacity-100" : "opacity-0",
         ].join(" ")}
+        style={{ touchAction: "none" }}
       >
         <LingbotMainVideoView
           className="h-full w-full"

@@ -68,8 +68,10 @@ export interface SeedImageOptions {
   seed?: number;
 }
 
-const W = 1024;
-const H = 576;
+export const SEED_IMAGE_WIDTH = 1024;
+export const SEED_IMAGE_HEIGHT = 576;
+const W = SEED_IMAGE_WIDTH;
+const H = SEED_IMAGE_HEIGHT;
 
 /**
  * Generate a procedural seed image as a Blob (PNG).
@@ -90,11 +92,19 @@ export async function generateSeedImage(opts: SeedImageOptions = {}): Promise<Bl
 
   if (typeof document === "undefined") return null;
 
-  // Use OffscreenCanvas in workers/SSR, regular canvas everywhere else.
+  // Use OffscreenCanvas where supported, regular canvas everywhere else.
+  // Set width/height as real HTMLCanvasElement properties (not
+  // Object.assign over enumerable props) — some browsers treat the
+  // descriptor as getter-only.
   const canvas: OffscreenCanvas | HTMLCanvasElement =
     typeof OffscreenCanvas !== "undefined"
       ? new OffscreenCanvas(width, height)
-      : Object.assign(document.createElement("canvas"), { width, height });
+      : (() => {
+          const c = document.createElement("canvas");
+          c.width = width;
+          c.height = height;
+          return c;
+        })();
 
   const ctx = (canvas as any).getContext("2d") as
     | OffscreenCanvasRenderingContext2D
@@ -145,16 +155,19 @@ function drawNoise(
   opacity: number
 ) {
   // Read the current pixels (the gradient drawn just before us), add
-  // per-channel noise, write back. The earlier version did this on a
-  // freshly-zeroed buffer and then putImageData replaced the gradient
-  // with monochrome noise — audit bug #9.
+  // *coloured* noise per channel, write back. The previous version
+  // drew the same grey value on R/G/B which produced a desaturated
+  // anchor; the model clearly prefers a coloured wash.
   const img = ctx.getImageData(0, 0, w, h);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
-    const n = (rng() - 0.5) * 255 * opacity;
-    d[i] = clamp255(d[i] + n);
-    d[i + 1] = clamp255(d[i + 1] + n);
-    d[i + 2] = clamp255(d[i + 2] + n);
+    // Independent draws per channel — produces soft chroma variation.
+    const nr = (rng() - 0.5) * 255 * opacity;
+    const ng = (rng() - 0.5) * 255 * opacity;
+    const nb = (rng() - 0.5) * 255 * opacity;
+    d[i] = clamp255(d[i] + nr);
+    d[i + 1] = clamp255(d[i + 1] + ng);
+    d[i + 2] = clamp255(d[i + 2] + nb);
     // Alpha is already 255 from the gradient; leave it alone.
   }
   ctx.putImageData(img, 0, 0);

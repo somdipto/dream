@@ -119,3 +119,31 @@ export function groupByCategory(): Array<{ category: string; scenes: CuratedScen
   }
   return Array.from(groups.entries()).map(([category, scenes]) => ({ category, scenes }));
 }
+
+/**
+ * Pick a curated scene deterministically from today's date string.
+ * The same calendar day on the same device always yields the same
+ * scene — so a user who comes back the next day sees a new starting
+ * dream, and a user who closes/reopens the app today sees the same
+ * dream. The selection rotates through `CURATED_SCENES` based on
+ * a stable hash of `YYYY-MM-DD`.
+ */
+export function dailyDream(now: Date = new Date()): CuratedScene {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const key = `${y}-${m}-${d}`;
+  let hash = 2166136261 >>> 0;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  const idx = hash % CURATED_SCENES.length;
+  return CURATED_SCENES[idx];
+}
+
+/** Human-friendly "Dream of June 20" style title for the daily session. */
+export function dailyDreamTitle(now: Date = new Date()): string {
+  const month = now.toLocaleString("en-US", { month: "long" });
+  return `Dream of ${month} ${now.getDate()}`;
+}

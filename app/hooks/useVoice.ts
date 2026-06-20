@@ -168,6 +168,10 @@ export function useVoice(): VoiceControls {
         e.error === "service-not-allowed"
       ) {
         shouldListenRef.current = false;
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
         setListening(false);
       }
     };
@@ -175,14 +179,26 @@ export function useVoice(): VoiceControls {
     rec.onend = () => {
       // Auto-restart while the user wants to be listening. The browser
       // ends the session after silence or a session cap; this loop keeps
-      // it effectively continuous.
+      // it effectively continuous. Construct a *fresh* recogniser each
+      // time — Chrome will refuse `start()` on the same instance after
+      // it ends once.
       if (shouldListenRef.current) {
-        try {
-          rec.start();
-          return;
-        } catch {
-          // If start() throws (e.g., already started), fall through to idle.
-        }
+        // Detach this recogniser's listeners so a delayed onend doesn't
+        // double-fire while we're spinning up the next one.
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+        recRef.current = null;
+        // Defer to next tick so any in-flight onresult lands first.
+        setTimeout(() => {
+          if (!shouldListenRef.current) return;
+          try {
+            start();
+          } catch {
+            // give up — will recover on the next user gesture.
+          }
+        }, 50);
+        return;
       }
       setListening(false);
     };
@@ -196,16 +212,16 @@ export function useVoice(): VoiceControls {
       shouldListenRef.current = false;
       setListening(false);
     }
-  }, [supported, armSilenceFlush]);
+  }, [supported, armSilenceFlush, commitBufferAsFinal]);
 
   const stop = useCallback(() => {
     shouldListenRef.current = false;
     flushSilence();
     const rec = recRef.current;
     if (rec) {
-      // Null out the handlers FIRST so a delayed `onend` (which
-      // browsers sometimes fire after `stop()`) doesn't restart the
-      // recogniser via the auto-restart loop. Audit bug #14/#16.
+      // Null handlers FIRST so a delayed onend (which browsers sometimes
+      // fire after `stop()`) doesn't restart the recogniser via the
+      // auto-restart loop. Audit bug #14/#16.
       try {
         rec.onresult = null;
         rec.onerror = null;
@@ -214,7 +230,13 @@ export function useVoice(): VoiceControls {
         // ignore
       }
       try {
-        rec.stop();
+        // abort() cuts the audio immediately so a mid-utterance stop
+        // doesn't lose the user's last phrase to a delayed onresult.
+        if (typeof rec.abort === "function") {
+          rec.abort();
+        } else {
+          rec.stop();
+        }
       } catch {
         // ponytail: stopping an already-stopped recogniser throws on some browsers.
       }

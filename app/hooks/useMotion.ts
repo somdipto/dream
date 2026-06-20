@@ -141,14 +141,22 @@ export function useMotion(
     };
   }, [permission, alpha]);
 
-  // Classify movement + turning from current tilt.
-  const moving: "idle" | "forward" | "backward" =
-    tilt.pitch > fwdT ? "forward" : tilt.pitch < backT ? "backward" : "idle";
-  const turning: "idle" | "left" | "right" =
-    tilt.yaw < -lookT ? "left" : tilt.yaw > lookT ? "right" : "idle";
+  // Classify movement + turning from current tilt. Memoized on the
+  // exact threshold values (not the wrapper) so consumers that destructure
+  // the primitives see stable references when the input is stable.
+  const moving: "idle" | "forward" | "backward" = useMemo(
+    () => (tilt.pitch > fwdT ? "forward" : tilt.pitch < backT ? "backward" : "idle"),
+    [tilt.pitch, fwdT, backT],
+  );
+  const turning: "idle" | "left" | "right" = useMemo(
+    () => (tilt.yaw < -lookT ? "left" : tilt.yaw > lookT ? "right" : "idle"),
+    [tilt.yaw, lookT],
+  );
 
-  // ponytail: destructure primitives so consumers can depend on stable
-  // values, not the wrapper object reference.
+  // Build the returned object WITHOUT putting `moving` / `turning` in
+  // the dep array. The previous version listed them, which changed the
+  // memoized object identity on every tilt update (60 Hz) — that
+  // re-rendered every consumer every frame.
   return useMemo(
     () => ({
       pitch: tilt.pitch,
@@ -161,6 +169,6 @@ export function useMotion(
       moving,
       turning,
     }),
-    [tilt, permission, requestPermission, recalibrate, moving, turning],
+    [tilt.pitch, tilt.roll, tilt.yaw, tilt.available, permission, requestPermission, recalibrate, moving, turning],
   );
 }

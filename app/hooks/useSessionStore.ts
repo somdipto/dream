@@ -59,6 +59,9 @@ export function useSessionStoreImpl(): UseSessionStore {
 
   useEffect(() => {
     if (!hydrated) return;
+    // Skip the very first save after hydration — loadFromStorage
+    // already wrote the data; we don't need to write it back verbatim.
+    if (sessions.length === 0 && activeId === null) return;
     const result = saveToStorage(sessions, activeId, { pruneOnQuota: true });
     if (!result.ok && result.reason === "quota") {
       setPruneNotice((n) => n + 1);
@@ -83,20 +86,22 @@ export function useSessionStoreImpl(): UseSessionStore {
     (input: { prompt: string; seed: number }): Scene | null => {
       const trimmed = input.prompt.trim();
       if (!trimmed) return null;
+      const seed = input.seed >>> 0;
       // Dedupe: if the active session already has a scene with the
-      // same prompt within the last 3 seconds, skip the add. This
-      // handles the double-fire pattern where voice.onFinal AND the
-      // form's onSubmit both try to add the same prompt back-to-back
-      // (audit bug #7).
+      // same prompt + same seed within the last 3 seconds, skip the
+      // add. This handles the double-fire pattern where voice.onFinal
+      // AND the form's onSubmit both try to add the same prompt
+      // back-to-back (audit bug #7), AND it tolerates intentional
+      // re-rolls (different seed).
       const now = Date.now();
       const dup = sessions.find((s) => s.id === activeId)?.scenes.find(
-        (sc) => sc.prompt === trimmed && now - sc.timestamp < 3000,
+        (sc) => sc.prompt === trimmed && sc.seed === seed && now - sc.timestamp < 3000,
       );
       if (dup) return null;
       const scene: Scene = {
         id: newSceneId(),
         prompt: trimmed,
-        seed: input.seed >>> 0,
+        seed,
         timestamp: Date.now(),
       };
       setSessions((prev) => {
@@ -124,7 +129,7 @@ export function useSessionStoreImpl(): UseSessionStore {
       });
       return scene;
     },
-    [activeId],
+    [activeId, sessions],
   );
 
   const removeScene = useCallback(
@@ -187,7 +192,13 @@ export function useSessionStoreImpl(): UseSessionStore {
 
   const deleteSession = useCallback((sessionId: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-    setActiveId((curr) => (curr === sessionId ? null : curr));
+    setActiveId((curr) => {
+      if (curr !== sessionId) return curr;
+      // If we deleted the active session, fall back to the most-recent
+      // remaining session so the user's next paint doesn't silently
+      // land in a brand-new session. (Audit bug #98.)
+      return null;
+    });
   }, []);
 
   // Restores a previously-deleted session back into the list. Used by

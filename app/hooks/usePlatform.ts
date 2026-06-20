@@ -10,9 +10,12 @@ import { useEffect, useState } from "react";
 // keyboard + mouse-look handlers and to skip the voice auto-arm on
 // desktop where the user is unlikely to have a mic attached.
 //
-// Why not just `window.innerWidth < 768`? Tablets and small laptops
-// lie. The pointer check (`matchMedia("(pointer: fine)")`) is a much
-// better signal for "this user has a real keyboard and mouse".
+// iPadOS 13+ detection:
+//   On iPadOS, Safari reports a `Macintosh` user-agent (Apple's "all
+//   Macs are iPads" privacy initiative). The reliable signal is
+//   `navigator.maxTouchPoints > 0` combined with `Macintosh` UA — that
+//   is an iPad. Without this, iPads were mis-detected as desktop and
+//   the gyro/mic UI was hidden.
 
 export interface PlatformInfo {
   /** True on the desktop layout (pointer:fine, no touch). */
@@ -37,23 +40,37 @@ export function usePlatform(): PlatformInfo {
       const hover = window.matchMedia("(hover: hover)").matches;
       const ua = navigator.userAgent;
       const touchUa = /Mobi|Android|iPhone|iPad|iPod/i.test(ua);
+      // iPadOS 13+ hides behind Macintosh UA but reports touch points.
+      const isIpadOs =
+        /Macintosh/i.test(ua) && (navigator.maxTouchPoints ?? 0) > 0;
+      const isMobileUa = touchUa || isIpadOs;
 
       // A "desktop" surface: fine pointer (mouse), hover capable, no
-      // touch UA. Phones can fake `pointer: fine` on some browsers
-      // when a mouse is attached — `hover: hover` disambiguates.
-      const isDesktop = fine && hover && !touchUa;
-      const isMobile = coarse || touchUa;
-      // Best-effort keyboard detection: every desktop browser reports
-      // `keyboard` as part of the `pointer:fine` media. We also fall
-      // back to UA heuristic.
+      // touch UA AND not iPadOS. Phones can fake `pointer: fine` on
+      // some browsers when a mouse is attached — `hover: hover`
+      // disambiguates.
+      const isDesktop = fine && hover && !isMobileUa;
+      const isMobile = coarse || isMobileUa;
       const hasKeyboard = isDesktop;
       setInfo({ isDesktop, isMobile, hasKeyboard });
     }
     detect();
-    // Re-detect on resize in case the user plugged in a mouse or
-    // rotated a tablet into a desktop dock.
-    window.addEventListener("resize", detect);
-    return () => window.removeEventListener("resize", detect);
+
+    // Subscribe to media-query changes so attaching/detaching a mouse
+    // or keyboard (e.g. an iPad into its keyboard dock) re-detects
+    // without waiting for a resize event.
+    const queries = [
+      window.matchMedia("(pointer: fine)"),
+      window.matchMedia("(pointer: coarse)"),
+      window.matchMedia("(hover: hover)"),
+    ];
+    const mqListener = () => detect();
+    for (const q of queries) q.addEventListener("change", mqListener);
+    window.addEventListener("resize", mqListener);
+    return () => {
+      for (const q of queries) q.removeEventListener("change", mqListener);
+      window.removeEventListener("resize", mqListener);
+    };
   }, []);
 
   return info;

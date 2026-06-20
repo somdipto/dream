@@ -23,6 +23,9 @@ import {
   hasConflict,
 } from "../lib/style-presets";
 import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
+import { dreamBus } from "../lib/event-bus";
+import { parseVoiceStyle } from "../lib/voice-style-parser";
+import { captureCurrentFrame } from "../lib/pose-lock";
 
 // Desktop equivalent of VoiceDream. Same paint pipeline (reset →
 // fresh seed image → setImage → setPrompt → start) but driven by a
@@ -46,6 +49,10 @@ export function DesktopDream() {
   const [styleId, setStyleId] = useState<string | null>(null);
   const [variantId, setVariantId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Pose Lock — when true, the next paintDream uses the captured
+  // current frame as the seed image instead of a fresh noise gradient.
+  const [poseLocked, setPoseLocked] = useState(false);
+  const [poseLockedAt, setPoseLockedAt] = useState<number>(0);
 
   const inFlightRef = useRef(false);
   const queuedRef = useRef<string | null>(null);
@@ -59,10 +66,13 @@ export function DesktopDream() {
   // world is actively generating. (Audit bug #5.)
   const snapshotRef = useRef<LingbotStateMessage | null>(null);
 
-  useLingbotState((msg) => {
+  // Wrap the state callback in `useCallback` with stable deps so the
+  // SDK doesn't unsubscribe/resubscribe on every render.
+  const onState = useCallback((msg: LingbotStateMessage) => {
     setSnapshot(msg);
     snapshotRef.current = msg;
-  });
+  }, []);
+  useLingbotState(onState);
 
   useLingbotImageAccepted(() => {
     if (imageReadyRef.current) {
@@ -162,7 +172,9 @@ export function DesktopDream() {
             await Promise.race([resetDone, resetTimeout]);
             resetReadyRef.current = null;
           }
-          const blob = await generateSeedImage({ seed });
+          const blob = poseLocked
+            ? await captureCurrentFrame().then((b) => b ?? generateSeedImage({ seed }))
+            : await generateSeedImage({ seed });
           let ref: Awaited<ReturnType<typeof uploadFile>> | null = null;
           for (let attempt = 0; attempt < 2 && !ref; attempt++) {
             const uploadPromise = blob ? uploadFile(blob, { name: `seed-${seed}.png` }) : Promise.resolve(null);
@@ -230,6 +242,8 @@ export function DesktopDream() {
         if (!generating) setPhase("idle");
       }
       inFlightRef.current = false;
+      // Consume the pose lock — only affects the next paint.
+      if (poseLocked) setPoseLocked(false);
       const next = queuedRef.current;
       queuedRef.current = null;
       if (next) {
@@ -240,29 +254,22 @@ export function DesktopDream() {
     // value from `snapshotRef`. The fewer deps, the more stable the
     // function identity, the less the `dream:loadScene` listener
     // re-binds. (Audit bug #4.)
-    [generating, uploadFile, setImage, setPrompt, start, reset],
+    [generating, uploadFile, setImage, setPrompt, start, reset, poseLocked],
   );
 
   // Listen for scene-load events from the sidebar OR from the share-URL
-  // consumption. Registered ONCE on mount; reads the latest paintDream
-  // from a ref so we don't tear down/rebind on every state update.
-  // Also writes the curated/restored scene into the active journal so
-  // it shows up in the session list — without this, picking a curated
-  // scene paints the world but never saves it (audit bug #31).
+  // consumption. Subscribed to our typed event bus (only our own
+  // modules can emit — no global window event for browser extensions
+  // to hijack).
   const paintDreamRef = useRef(paintDream);
   paintDreamRef.current = paintDream;
   useEffect(() => {
-    function onLoad(e: Event) {
-      const detail = (e as CustomEvent).detail as
-        | { prompt: string; seed: number }
-        | undefined;
+    return dreamBus.on("dream:loadScene", (detail) => {
       if (!detail?.prompt) return;
       setText(detail.prompt);
       sessions.addScene({ prompt: detail.prompt, seed: detail.seed });
       void paintDreamRef.current(detail.prompt, { seed: detail.seed });
-    }
-    window.addEventListener("dream:loadScene", onLoad as EventListener);
-    return () => window.removeEventListener("dream:loadScene", onLoad as EventListener);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -320,23 +327,30 @@ export function DesktopDream() {
     };
   }, [voice]);
 
-  // Auto-paint when voice commits a phrase. Guarded against the
+// Auto-paint when voice commits a phrase. Guarded against the
   // double-addScene bug: voice.onFinal AND form submit both fire on
   // the same text if the user types and then talks — the dedupe
-  // (audit bug #7) lives in `useSessions.addScene` which now checks
-  // for a recent identical prompt.
+  // (audit bug #7) lives in `useSessions.addScene` which now keys on
+  // prompt+seed so re-rolls don't dedupe.
+  // Also routes the transcript through `parseVoiceStyle` so spoken
+  // phrases like "in noir style" or "at sunset" toggle the chip
+  // system and produce a cleaner prompt for the model.
+  const onFinalCb = useCallback((text: string) => {
+    const t = text.trim();
+    if (!t) return;
+    const parsed = parseVoiceStyle(t);
+    if (parsed.styleId && parsed.styleId !== styleId) setStyleId(parsed.styleId);
+    if (parsed.variantId && parsed.variantId !== variantId) setVariantId(parsed.variantId);
+    const cleaned = parsed.cleanedPrompt || t;
+    setText(cleaned);
+    const seed = hashSeed(cleaned + ":" + sessionNonceRef.current.toString(16)) >>> 0;
+    sessions.addScene({ prompt: cleaned, seed });
+    void paintDream(cleaned, { seed });
+  }, [paintDream, sessions, styleId, variantId]);
   useEffect(() => {
     if (!voice.supported) return;
-    return voice.onFinal((text) => {
-      const t = text.trim();
-      if (!t) return;
-      setText(t);
-      const seed = hashSeed(t + ":" + sessionNonceRef.current.toString(16)) >>> 0;
-      sessions.addScene({ prompt: t, seed });
-      void paintDream(t, { seed });
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voice, sessions]);
+    return voice.onFinal(onFinalCb);
+  }, [voice.supported, voice, onFinalCb]);
 
   // On first ready + no active session, also re-paint the last scene
   // of the active session if it has one.
@@ -465,6 +479,25 @@ export function DesktopDream() {
           className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-white/10 bg-white/10 text-base text-white/85 transition hover:bg-white/20 disabled:opacity-40"
         >
           🎲
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setPoseLocked(true);
+            setPoseLockedAt(Date.now());
+          }}
+          disabled={!lastPrompt && !text.trim()}
+          aria-label="Lock the current frame as the next paint's anchor"
+          title={poseLocked ? "Pose lock armed — next paint uses the current frame" : "Lock pose — evolve from the current frame"}
+          data-testid="desktop-pose-lock-btn"
+          className={[
+            "grid h-12 w-12 shrink-0 place-items-center rounded-full border text-base transition",
+            poseLocked
+              ? "border-amber-400/60 bg-amber-500/30 text-white"
+              : "border-white/10 bg-white/10 text-white/85 hover:bg-white/20 disabled:opacity-40",
+          ].join(" ")}
+        >
+          📌
         </button>
         <button
           type="button"

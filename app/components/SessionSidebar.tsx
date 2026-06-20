@@ -44,6 +44,9 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
     timeoutId: ReturnType<typeof setTimeout>;
   } | null>(null);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mobile swipe-down-to-close. Tracks a drag in progress.
+  const dragRef = useRef<{ y: number; t: number; dy: number } | null>(null);
+  const asideRef = useRef<HTMLElement | null>(null);
 
   const isDesktop = platform.isDesktop;
   const sorted = [...store.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -54,6 +57,53 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
       if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     };
   }, []);
+
+  // Mobile-only swipe-down-to-close. Threshold: drag > 100px OR
+  // velocity > 0.5 px/ms. We track only the first finger; secondary
+  // fingers are ignored.
+  useEffect(() => {
+    if (isDesktop) return;
+    const el = asideRef.current;
+    if (!el) return;
+    function onStart(e: TouchEvent) {
+      if (!open) return;
+      const t = e.touches[0];
+      if (!t) return;
+      // Only start a drag from the top ~30% of the sheet (the
+      // grab-handle area). Touches lower on the sheet are content
+      // scrolls and shouldn't dismiss the panel.
+      const r = el!.getBoundingClientRect();
+      if (t.clientY - r.top > r.height * 0.3) return;
+      dragRef.current = { y: t.clientY, t: Date.now(), dy: 0 };
+    }
+    function onMove(e: TouchEvent) {
+      const d = dragRef.current;
+      if (!d) return;
+      const t = e.touches[0];
+      if (!t) return;
+      d.dy = Math.max(0, t.clientY - d.y);
+    }
+    function onEnd() {
+      const d = dragRef.current;
+      if (!d) return;
+      const elapsed = Math.max(1, Date.now() - d.t);
+      const velocity = d.dy / elapsed;
+      if (d.dy > 100 || velocity > 0.5) {
+        onClose();
+      }
+      dragRef.current = null;
+    }
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: true });
+    el.addEventListener("touchend", onEnd, { passive: true });
+    el.addEventListener("touchcancel", onEnd, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, [isDesktop, open, onClose]);
 
   function deleteWithUndo(session: Session) {
     // Capture the session at delete time so the "Undo" can put it back
@@ -83,6 +133,7 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
       )}
 
       <aside
+        ref={asideRef}
         className={[
           "fixed z-40 bg-black/85 text-white shadow-2xl backdrop-blur transition-transform",
           isDesktop
@@ -101,6 +152,16 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
         // (Audit bug #34.)
         {...({ inert: !open } as { inert?: boolean })}
       >
+        {/* Mobile-only drag handle. The grab-handle area is the top
+            ~30% of the sheet (see the touchstart handler above). */}
+        {!isDesktop && (
+          <div className="flex justify-center pt-2">
+            <span
+              aria-hidden="true"
+              className="h-1 w-10 rounded-full bg-white/20"
+            />
+          </div>
+        )}
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
           <div className="flex gap-2" role="tablist" aria-label="Journal tabs">
             <button

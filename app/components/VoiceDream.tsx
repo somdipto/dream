@@ -23,6 +23,9 @@ import {
   hasConflict,
 } from "../lib/style-presets";
 import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
+import { dreamBus } from "../lib/event-bus";
+import { parseVoiceStyle } from "../lib/voice-style-parser";
+import { captureCurrentFrame } from "../lib/pose-lock";
 
 // The single hero surface of the app.
 //
@@ -62,6 +65,9 @@ export function VoiceDream() {
   const [variantId, setVariantId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [text, setText] = useState("");
+  // Pose Lock — when true, the next paint uses the captured current
+  // frame as the seed image instead of a fresh noise gradient.
+  const [poseLocked, setPoseLocked] = useState(false);
 
   const inFlightRef = useRef(false);
   const queuedRef = useRef<string | null>(null);
@@ -73,10 +79,13 @@ export function VoiceDream() {
   // it without the user re-typing.
   const lastPaintedRef = useRef<string | null>(null);
 
-  useLingbotState((msg) => {
+  // Wrap the state callback in useCallback with stable deps so the
+  // SDK doesn't unsubscribe/resubscribe on every render.
+  const onState = useCallback((msg: LingbotStateMessage) => {
     setSnapshot(msg);
     snapshotRef.current = msg;
-  });
+  }, []);
+  useLingbotState(onState);
 
   const imageReadyRef = useRef<(() => void) | null>(null);
   const resetReadyRef = useRef<(() => void) | null>(null);
@@ -188,7 +197,9 @@ export function VoiceDream() {
             await Promise.race([resetDone, resetTimeout]);
             resetReadyRef.current = null;
           }
-          const blob = await generateSeedImage({ seed });
+          const blob = poseLocked
+            ? await captureCurrentFrame().then((b) => b ?? generateSeedImage({ seed }))
+            : await generateSeedImage({ seed });
           let ref: Awaited<ReturnType<typeof uploadFile>> | null = null;
           for (let attempt = 0; attempt < 2 && !ref; attempt++) {
             const uploadPromise = blob ? uploadFile(blob, { name: `seed-${seed}.png` }) : Promise.resolve(null);
@@ -256,13 +267,15 @@ export function VoiceDream() {
         if (!generating) setPhase("idle");
       }
       inFlightRef.current = false;
+      // Consume the pose lock — only affects the next paint.
+      if (poseLocked) setPoseLocked(false);
       const next = queuedRef.current;
       queuedRef.current = null;
       if (next) {
         setTimeout(() => void paintDream(next), 0);
       }
     },
-    [ready, generating, uploadFile, setImage, setPrompt, start, reset],
+    [ready, generating, uploadFile, setImage, setPrompt, start, reset, poseLocked],
   );
 
   // Stable ref for use inside effects that shouldn't re-bind on every
@@ -273,14 +286,27 @@ export function VoiceDream() {
   // Auto-send on every committed phrase from the speech engine. The
   // useVoice hook fires this for both `isFinal` events and the
   // silence-flush, so the world mutates the moment the user pauses.
+  // Wrap the handler in useCallback so the listener identity is
+  // stable; the previous effect re-bound every render because
+  // `voice` and `sessions` are non-memoized objects.
+  // Also routes the transcript through `parseVoiceStyle` so spoken
+  // phrases like "in noir style" or "at sunset" toggle the chip
+  // system and produce a cleaner prompt for the model.
+  const onFinalCb = useCallback((text: string) => {
+    const t = text.trim();
+    if (!t) return;
+    const parsed = parseVoiceStyle(t);
+    if (parsed.styleId && parsed.styleId !== styleId) setStyleId(parsed.styleId);
+    if (parsed.variantId && parsed.variantId !== variantId) setVariantId(parsed.variantId);
+    const cleaned = parsed.cleanedPrompt || t;
+    const seed = hashSeed(cleaned + ":" + sessionNonceRef.current.toString(16)) >>> 0;
+    sessions.addScene({ prompt: cleaned, seed });
+    void paintDreamRef.current(cleaned, { seed });
+  }, [sessions, styleId, variantId]);
   useEffect(() => {
     if (!ready) return;
-    return voice.onFinal((text) => {
-      const seed = hashSeed(text + ":" + sessionNonceRef.current.toString(16)) >>> 0;
-      sessions.addScene({ prompt: text, seed });
-      void paintDreamRef.current(text, { seed });
-    });
-  }, [ready, voice, sessions]);
+    return voice.onFinal(onFinalCb);
+  }, [ready, voice, onFinalCb]);
 
   // If the user mutes while listening, stop the recogniser.
   useEffect(() => {
@@ -297,26 +323,23 @@ export function VoiceDream() {
     if (ready && !muted && !voice.listening && voice.supported && !voice.error) {
       voice.start();
     }
-  }, [ready, muted, voice]);
+  }, [ready, muted, voice.listening, voice.supported, voice.error, voice.start]);
 
   // Listen for scene-load events from the sidebar (curated picks,
   // past scene replay). Saves to the journal so the pick shows up in
   // the sidebar — the desktop path already does this; mobile was
   // missing the listener entirely so curated taps silently no-op'd.
+  // Now subscribes to the typed event bus instead of window so a
+  // browser extension cannot inject prompts.
   useEffect(() => {
-    function onLoad(e: Event) {
-      const detail = (e as CustomEvent).detail as
-        | { prompt: string; seed: number }
-        | undefined;
+    return dreamBus.on("dream:loadScene", (detail) => {
       if (!detail?.prompt) return;
       setLastPrompt(detail.prompt);
       setLastSeed(detail.seed);
       setText(detail.prompt);
       sessions.addScene({ prompt: detail.prompt, seed: detail.seed });
       void paintDreamRef.current(detail.prompt, { seed: detail.seed });
-    }
-    window.addEventListener("dream:loadScene", onLoad as EventListener);
-    return () => window.removeEventListener("dream:loadScene", onLoad as EventListener);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -455,6 +478,22 @@ export function VoiceDream() {
         </button>
         <button
           type="button"
+          onClick={() => setPoseLocked((p) => !p)}
+          disabled={!lastPrompt}
+          aria-label="Lock the current frame as the next paint's anchor"
+          title={poseLocked ? "Pose lock armed" : "Lock pose"}
+          data-testid="mobile-pose-lock-btn"
+          className={[
+            "grid h-10 w-10 place-items-center rounded-full border text-white/85 transition disabled:opacity-40",
+            poseLocked
+              ? "border-amber-400/60 bg-amber-500/30"
+              : "border-white/10 bg-white/10 hover:bg-white/20",
+          ].join(" ")}
+        >
+          📌
+        </button>
+        <button
+          type="button"
           onClick={onShare}
           disabled={!lastPrompt}
           aria-label={copied ? "Link copied" : "Copy a shareable link"}
@@ -464,36 +503,43 @@ export function VoiceDream() {
         >
           {copied ? "✓" : "🔗"}
         </button>
-        <button
-          type="button"
-          onClick={onMicClick}
-          disabled={!voice.supported || !ready}
-          className={[
-            "mx-auto grid h-16 w-16 place-items-center rounded-full border transition active:scale-95",
-            muted
-              ? "border-white/10 bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70"
+        <div className="flex flex-col items-center gap-1">
+          <button
+            type="button"
+            onClick={onMicClick}
+            disabled={!voice.supported || !ready}
+            className={[
+              "mx-auto grid h-16 w-16 place-items-center rounded-full border transition active:scale-95",
+              muted
+                ? "border-white/10 bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70"
+                : voice.listening
+                  ? "animate-pulse border-red-400/60 bg-red-500/80 text-white"
+                  : "border-white/30 bg-white/10 text-white hover:bg-white/20",
+              (!voice.supported || !ready) && "opacity-40",
+            ].filter(Boolean).join(" ")}
+            aria-label={
+              muted
+                ? "Mic muted — click to unmute"
+                : voice.listening
+                  ? "Mic on — click to mute"
+                  : "Start listening"
+            }
+            data-testid="mobile-mic-btn"
+          >
+            <MicIcon active={voice.listening} muted={muted} />
+          </button>
+          <p className="text-[10px] uppercase tracking-wider text-white/50" aria-live="polite">
+            {muted
+              ? "Muted"
               : voice.listening
-                ? "animate-pulse border-red-400/60 bg-red-500/80 text-white"
-                : "border-white/30 bg-white/10 text-white hover:bg-white/20",
-            (!voice.supported || !ready) && "opacity-40",
-          ].filter(Boolean).join(" ")}
-          aria-label={
-            muted
-              ? "Mic muted — click to unmute"
-              : voice.listening
-                ? "Mic on — click to mute"
-                : "Start listening"
-          }
-        >
-          <MicIcon active={voice.listening} muted={muted} />
-        </button>
-        <p className="sr-only">
-          {muted
-            ? "Muted — click to listen"
-            : voice.listening
-              ? "Tap to mute"
-              : "Tap to speak"}
-        </p>
+                ? "Listening"
+                : !voice.supported
+                  ? "Mic unavailable"
+                  : voice.error
+                    ? "Tap to retry"
+                    : "Tap to speak"}
+          </p>
+        </div>
       </div>
 
       <form onSubmit={onTextSubmit} className="flex gap-2">
