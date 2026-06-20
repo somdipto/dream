@@ -49,12 +49,14 @@ async function fetchToken(): Promise<string> {
   return jwt;
 }
 
-// Brighter, hyper-realistic default desktop scene. "LiveVocs" and
-// "GTLI" goal references in the original ask; we don't have those
-// products so we push LingBot toward photo-real with vivid lighting
-// cues baked into the prompt.
+// Brighter, hyper-realistic default desktop scene. M9.13 tightened
+// the lighting cues further after the user reported "blank dark
+// black screen" — every descriptor now actively pushes the model
+// toward a clearly-lit, daytime, photo-real result. Repetition is
+// intentional; LingBot's prompt parser weights early + explicit
+// lighting words heavily.
 const DEFAULT_DESKTOP_PROMPT =
-  "a sunlit alpine meadow at golden hour, wildflowers in the foreground, distant snow-capped peaks, warm soft sunlight, vivid colors, butterflies and bees, shallow depth of field, hyper-realistic, 8K, cinematic";
+  "a sunlit alpine meadow at golden hour, brightly lit, soft warm sunlight streaming from the upper left, vivid wildflowers in the foreground — red, yellow, blue, distant snow-capped peaks glowing in the sun, clear blue sky with soft cumulus clouds, butterflies, bees, shallow depth of field, vibrant saturated colors, hyper-realistic photo, 8K, cinematic lighting, well-exposed, no shadows in the foreground, no moody lighting, no night, no overcast";
 
 export function LingbotApp() {
   return (
@@ -379,15 +381,29 @@ function DreamSurface() {
     void connect();
   }, [connect]);
 
-  // Before Begin: friendly landing overlay. Pure black per the
-  // M9.6 design pass — the user prefers a clean, quiet landing
-  // surface. The aurora gradient still lives on the *connecting*
-  // interstitial (see below) so the "hard black screen" bug
-  // reported in M8.4 stays fixed: the user never sees a black
-  // surface while the SDK is actively trying to connect.
+  // Before Begin: friendly landing overlay.
+  //
+  // M9.14: the prior versions oscillated between pure black (M9.6,
+  // which the user eventually complained was too dark) and the
+  // multi-stop aurora (M8.4-M9.5, which they called "very shit").
+  // The middle ground: a single soft warm radial gradient on a
+  // dark-but-not-black base. The eye gets a gentle sun-like glow
+  // at the center (matching the "sunlit alpine meadow" default
+  // scene the app launches into), the corners stay dark enough
+  // that the white headline pops. No animated aurora — the user
+  // found that noisy. No pure black — they found that a void.
   if (!hasBegun) {
     return (
-      <main className="relative grid min-h-screen place-items-center overflow-hidden bg-black p-6 text-white">
+      <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0a14] p-6 text-white">
+        <div
+          className="pointer-events-none absolute inset-0"
+          aria-hidden="true"
+          data-testid="begin-warmth"
+          style={{
+            background:
+              "radial-gradient(ellipse at 50% 35%, rgba(253,224,150,0.18) 0%, rgba(244,114,182,0.06) 35%, rgba(10,10,20,0) 70%)",
+          }}
+        />
         {/* Recovery banner — surfaces if the previous storage blob was
             unreadable. Gives the user a chance to restore before we
             silently lose the journal. (Audit bug #30.)
@@ -510,18 +526,52 @@ function DreamSurface() {
           )}
         </div>
         <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-2">
+          {/* M9.15: visible active-session chip. The user reported
+              "I am continuing on that session until I start a new
+              session completely" — they had no visual cue for which
+              session they were in. The chip shows the active session's
+              title (or "Untitled" if no scenes yet) so the user can
+              confirm at a glance which journal the next paint will
+              land in. Tapping the chip opens the sidebar. */}
+          {sessions.activeSession && (
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              data-testid="active-session-chip"
+              title={`Currently editing: ${sessions.activeSession.title}. Tap to open the sidebar.`}
+              className="min-h-[40px] rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs text-white/85 backdrop-blur hover:bg-white/15"
+            >
+              <span className="text-white/55">● </span>
+              {sessions.activeSession.title}
+              <span className="ml-1.5 text-white/45">
+                · {sessions.activeSession.scenes.length}
+              </span>
+            </button>
+          )}
           <button
             onClick={() => {
               // "New session" — keep the current world running, just
               // start a fresh journal entry. The next paint goes into
               // the new session.
+              // M9.15: confirm before discarding in-progress scenes.
+              // The user has been surprised by taps creating new
+              // sessions silently. A short confirm prompt catches
+              // accidental taps (especially on mobile where the
+              // button is in the top-right reach).
+              const hasScenes =
+                (sessions.activeSession?.scenes.length ?? 0) > 0;
+              if (hasScenes && !window.confirm(
+                `Start a new session? Your current session (“${sessions.activeSession?.title}”) is saved with ${sessions.activeSession?.scenes.length} scene${sessions.activeSession?.scenes.length === 1 ? "" : "s"}.`,
+              )) {
+                return;
+              }
               sessions.createSession();
             }}
             aria-label="Start a new session"
             data-testid="new-session-btn"
-            className="rounded-full border border-emerald-400/40 bg-emerald-500/20 px-3 py-1.5 text-xs text-emerald-100 backdrop-blur hover:bg-emerald-500/30"
+            className="min-h-[40px] rounded-full border border-emerald-400/40 bg-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-100 backdrop-blur hover:bg-emerald-500/30"
           >
-            {platform.isMobile ? "+ New" : "+ New session"}
+            {platform.isMobile ? "+ New session" : "+ New session"}
           </button>
           <button
             onClick={handleReset}
@@ -607,7 +657,12 @@ function DreamSurface() {
       <>
         {topbar}
         {sidebar}
-        <main className="relative grid min-h-screen place-items-center overflow-hidden bg-black p-6 text-white">
+        {/* M9.14: bg-black → bg-[#0a0a14] to match the Begin
+            overlay's warmer base. The connecting state is a
+            continuation of the Begin experience; if the base color
+            changes between them, the user perceives a flash. Same
+            warmer base throughout the pre-paint journey. */}
+        <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0a14] p-6 text-white">
           {/* Aurora background — same gradient as Video.tsx so the
               transition from connecting → playing is seamless, with
               no hard black cut. (M8.4 bug fix; only rendered while
