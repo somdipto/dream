@@ -88,15 +88,16 @@ export function DesktopDream() {
       const seed = (opts?.seed ?? hashSeed(text + ":" + sessionNonceRef.current.toString(16))) >>> 0;
       setLastSeed(seed);
 
-      // Race the paint pipeline against a 30s wall clock. If Reactor's
-      // backend is hanging (e.g. upload slot exhaustion), we don't
-      // want to leave inFlightRef = true forever and block subsequent
-      // paints. The scene is already saved optimistically by the
-      // submit handler, so the worst case is the live preview doesn't
-      // update.
+      // Race the paint pipeline against an 8s wall clock. We do NOT want
+      // to leave the user staring at a "painting your dream…" pill
+      // for 30s on a single prompt — the model either starts producing
+      // frames within a few seconds or the backend is overloaded and
+      // we should fall back. The scene is already saved optimistically
+      // by the submit handler, so the worst case is the live preview
+      // doesn't update this time.
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
       const timeoutPromise = new Promise<"timeout">((resolve) => {
-        timeoutId = setTimeout(() => resolve("timeout"), 30000);
+        timeoutId = setTimeout(() => resolve("timeout"), 8000);
       });
       const pipeline = (async (): Promise<"ok" | "err"> => {
         try {
@@ -108,34 +109,42 @@ export function DesktopDream() {
             await resetDone;
           }
           const blob = await generateSeedImage({ seed });
-          // Race the upload against a 5s wall clock. If Reactor's
-          // upload slot is stuck (the most common failure mode in
-          // practice — `createUpload` POSTs can hang for tens of
-          // seconds when the demo queue is busy), skip the image
-          // and let the model start from a prompt-only state. The
-          // world is still generated; the seed image just provides
-          // a visual anchor.
+          // Race the upload against 3s. If Reactor's upload slot is
+          // stuck (the most common failure mode in practice), skip
+          // the image and let the model start from a prompt-only
+          // state. The world is still generated; the seed image is
+          // just a visual anchor.
           const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
-          const uploadTimeout = new Promise<null>((resolve) => {
-            setTimeout(() => resolve(null), 5000);
-          });
+          const uploadTimeout = new Promise<null>((resolve) =>
+            setTimeout(() => resolve(null), 3000),
+          );
           const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
           if (ref) {
+            // Also race the image_accepted callback against 3s. If
+            // the model never sends image_accepted, skip and start
+            // with prompt only.
             const imageReady = new Promise<void>((resolve) => {
               imageReadyRef.current = resolve;
             });
+            const imageReadyTimeout = new Promise<void>((resolve) =>
+              setTimeout(() => resolve(), 3000),
+            );
             await setImage({ image: ref });
-            await imageReady;
+            await Promise.race([imageReady, imageReadyTimeout]);
           } else {
             // eslint-disable-next-line no-console
             console.warn("[dream] seed upload timed out — painting without anchor image");
           }
           const prompt = composeScenePrompt({ text, isFirst: !snapshot?.has_prompt });
+          // Race the conditions-ready callback against 3s.
           const conditionsReady = new Promise<void>((resolve) => {
             conditionsReadyRef.current = resolve;
           });
+          const conditionsTimeout = new Promise<void>((resolve) =>
+            setTimeout(() => resolve(), 3000),
+          );
           await setPrompt({ prompt });
-          await conditionsReady;
+          await Promise.race([conditionsReady, conditionsTimeout]);
           await start();
           return "ok";
         } catch {
@@ -147,13 +156,16 @@ export function DesktopDream() {
       if (timeoutId) clearTimeout(timeoutId);
       if (result === "ok") {
         setPhase("live");
+        setError(null);
       } else if (result === "err") {
-        setError("Generation failed");
+        setError("Generation failed — your prompt is saved, try again in a moment");
         if (!generating) setPhase("idle");
       } else {
-        // timeout
-        setError("Generation is taking longer than expected — saved locally, will retry on next paint");
-        setPhase("idle");
+        // timeout — but the pipeline is still running in the
+        // background. Surface a gentle message; the user's prompt
+        // is already saved.
+        setError("Reactor is slow — your prompt is saved. The world may still be painting in the background.");
+        if (!generating) setPhase("idle");
       }
       inFlightRef.current = false;
       const next = queuedRef.current;

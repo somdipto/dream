@@ -146,23 +146,28 @@ export function VoiceDream() {
         //    - same prompt, two different sessions → two different images
         //    - different prompts, same session → two different images
         const blob = await generateSeedImage({ seed });
-        // Race the upload against 5s. If Reactor's upload slot is
+        // Race the upload against 3s. If Reactor's upload slot is
         // stuck, skip the seed image and start from the prompt only —
         // the model still produces a world. The seed image is a
         // visual anchor, not a hard requirement.
         const uploadPromise = uploadFile(blob, { name: `seed-${seed}.png` });
         const uploadTimeout = new Promise<null>((resolve) =>
-          setTimeout(() => resolve(null), 5000),
+          setTimeout(() => resolve(null), 3000),
         );
         const ref = (await Promise.race([uploadPromise, uploadTimeout])) as Awaited<typeof uploadPromise> | null;
 
-        // 3. setImage, then wait for image_accepted.
+        // 3. setImage, then wait for image_accepted. Race the wait
+        //    against 3s; if image_accepted never fires, fall through
+        //    so the model still gets the prompt + start.
         if (ref) {
           const imageReady = new Promise<void>((resolve) => {
             imageReadyRef.current = resolve;
           });
+          const imageReadyTimeout = new Promise<void>((resolve) =>
+            setTimeout(() => resolve(), 3000),
+          );
           await setImage({ image: ref });
-          await imageReady;
+          await Promise.race([imageReady, imageReadyTimeout]);
         } else {
           // eslint-disable-next-line no-console
           console.warn("[dream] seed upload timed out — painting without anchor image");
@@ -174,12 +179,16 @@ export function VoiceDream() {
         const prompt = composeScenePrompt({ text, isFirst: !snapshot?.has_prompt });
 
         // 5. setPrompt, then wait for conditions_ready (has_image &&
-        //    has_prompt both true in the next state message).
+        //    has_prompt both true in the next state message). Race
+        //    against 3s; if conditions never flip, start anyway.
         const conditionsReady = new Promise<void>((resolve) => {
           conditionsReadyRef.current = resolve;
         });
+        const conditionsTimeout = new Promise<void>((resolve) =>
+          setTimeout(() => resolve(), 3000),
+        );
         await setPrompt({ prompt });
-        await conditionsReady;
+        await Promise.race([conditionsReady, conditionsTimeout]);
 
         // 6. Start the generation. New scene, fresh world.
         await start();
