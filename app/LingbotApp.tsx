@@ -179,7 +179,14 @@ function DreamSurface() {
   // Before Begin: friendly landing overlay.
   if (!hasBegun) {
     return (
-      <main className="relative grid min-h-screen place-items-center bg-black p-6 text-white">
+      <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0612] p-6 text-white">
+        {/* Aurora — same gradient as connecting state and Video.tsx,
+            so the user never sees a hard black screen anywhere in
+            the app. */}
+        <div
+          className="pointer-events-none absolute inset-0 animate-[aurora-shift_18s_ease-in-out_infinite] bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.55),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(236,72,153,0.45),transparent_55%),radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.40),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(168,85,247,0.40),transparent_55%)] bg-[length:200%_200%]"
+          aria-hidden="true"
+        />
         {/* Recovery banner — surfaces if the previous storage blob was
             unreadable. Gives the user a chance to restore before we
             silently lose the journal. (Audit bug #30.)
@@ -267,12 +274,26 @@ function DreamSurface() {
   // Connecting: brief overlay between Begin and Connected. We track
   // a "has begun connecting" flag so the initial 100ms post-Begin
   // render doesn't flash a "disconnected" overlay.
+//
+// Bug fix: this used to be a hard `bg-black` page. That read as
+// "broken app" the moment a real user hit Begin, because the SDK
+// takes 5-15 seconds to actually connect. We now mirror the
+// Video.tsx aurora background so the user sees a beautiful animated
+// gradient while waiting, not a black void.
   if (status === "disconnected" || status === "connecting" || status === "waiting") {
     return (
-      <main className="relative grid min-h-screen place-items-center bg-black p-6 text-white">
-        <div className="max-w-sm text-center">
+      <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0612] p-6 text-white">
+        {/* Aurora background — same gradient as Video.tsx so the
+            transition from connecting → playing is seamless, with
+            no hard black cut. */}
+        <div
+          className="pointer-events-none absolute inset-0 animate-[aurora-shift_18s_ease-in-out_infinite] bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.55),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(236,72,153,0.45),transparent_55%),radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.40),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(168,85,247,0.40),transparent_55%)] bg-[length:200%_200%]"
+          aria-hidden="true"
+          data-testid="connect-aurora"
+        />
+        <div className="relative max-w-sm text-center">
           <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-amber-400" />
-          <p className="mt-4 text-sm text-white/80">
+          <p className="mt-4 text-sm text-white/85">
             {status === "disconnected"
               ? lastError
                 ? `Couldn't connect: ${lastError.message}`
@@ -280,6 +301,9 @@ function DreamSurface() {
               : status === "connecting"
                 ? "Connecting to Reactor…"
                 : "Waiting for a GPU…"}
+          </p>
+          <p className="mt-1 text-xs text-white/55">
+            This usually takes 5–15 seconds.
           </p>
           {lastError && (
             <button
@@ -291,7 +315,7 @@ function DreamSurface() {
           )}
           <button
             onClick={handleReset}
-            className="mt-3 block w-full text-[10px] uppercase tracking-wider text-white/40 hover:text-white/60"
+            className="mt-3 block w-full text-[10px] uppercase tracking-wider text-white/45 hover:text-white/70"
           >
             Back
           </button>
