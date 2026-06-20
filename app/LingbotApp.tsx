@@ -22,15 +22,25 @@ import { dailyDream, dailyDreamTitle } from "./lib/curated-scenes";
 import { dreamBus } from "./lib/event-bus";
 import { classifyReactorError } from "./lib/reactor-errors";
 import { bustNextToken, consumeBust } from "./lib/token-bust";
+import { loadUserKey, getFingerprint, saveUserKey as _saveUserKey, clearUserKey as _clearUserKey } from "./lib/byok";
 
 async function fetchToken(): Promise<string> {
   // M9.8: respect the one-shot bust flag so the Lingbot SDK doesn't
   // reuse a 6-hour JWT cached for an exhausted key. The flag is set
   // by the 402-recovery flow in ReactorErrorScreen before connect()
   // is called again.
+  //
+  // M9.12: forward the BYOK key (if any) to the server so the user
+  // can supply their own key when the host's pool is exhausted.
   const bust = consumeBust();
   const url = bust ? "/api/reactor/token?nocache=1" : "/api/reactor/token";
-  const r = await fetch(url, bust ? { cache: "no-store" } : undefined);
+  const userKey = loadUserKey();
+  const headers: Record<string, string> = {};
+  if (userKey) headers["X-Reactor-User-Key"] = userKey;
+  const r = await fetch(url, {
+    cache: bust ? "no-store" : undefined,
+    headers,
+  });
   if (!r.ok) {
     const body = (await r.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `Token fetch failed: ${r.status}`);
@@ -53,6 +63,145 @@ export function LingbotApp() {
         <DreamSurface />
       </LingbotProvider>
     </SessionProvider>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// M9.12: BYOK — a small inline field on the Begin overlay that lets the
+// user paste their own Reactor API key. Stored in localStorage (see
+// app/lib/byok.ts), forwarded to the server as the X-Reactor-User-Key
+// header on every token request. The server tries the user key first
+// and falls back to the env pool if it 402s.
+// ---------------------------------------------------------------------------
+function ByokKeyField({ onChanged }: { onChanged?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Hydrate the saved-fingerprint from localStorage on mount and
+  // when the field is opened.
+  useEffect(() => {
+    if (open) {
+      const fp = getFingerprint();
+      setSavedFingerprint(fp);
+      setDraft("");
+      setError(null);
+    }
+  }, [open]);
+
+  function onSave(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const v = draft.trim();
+    if (!v) return;
+    const ok = _saveUserKey(v);
+    if (!ok) {
+      setError("That doesn't look like a Reactor key (expected rk_<40+ chars).");
+      return;
+    }
+    setSavedFingerprint(getFingerprint());
+    setDraft("");
+    setError(null);
+    onChanged?.();
+  }
+
+  function onClear() {
+    _clearUserKey();
+    setSavedFingerprint(null);
+    setDraft("");
+    setError(null);
+    onChanged?.();
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        data-testid="byok-open-btn"
+        className="mt-4 text-[11px] text-white/45 underline-offset-2 hover:text-white/75 hover:underline"
+      >
+        Use your own Reactor key
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-4 w-full max-w-sm rounded-2xl border border-white/10 bg-white/5 p-3 text-left text-xs text-white/80">
+      {savedFingerprint ? (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-emerald-300">
+            Using your key <code className="font-mono">{savedFingerprint}</code>
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="rounded-full border border-white/15 px-2 py-1 text-[10px] text-white/70 hover:bg-white/10"
+            >
+              Done
+            </button>
+            <button
+              type="button"
+              onClick={onClear}
+              data-testid="byok-clear-btn"
+              className="rounded-full border border-red-400/30 px-2 py-1 text-[10px] text-red-200 hover:bg-red-500/15"
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={onSave} className="flex flex-col gap-2">
+          <label htmlFor="byok-key" className="text-[11px] text-white/65">
+            Paste a Reactor key (rk_…). Stored only on this device.
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="byok-key"
+              type="password"
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setError(null);
+              }}
+              placeholder="rk_…"
+              autoComplete="off"
+              spellCheck={false}
+              data-testid="byok-input"
+              className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/40 px-2 py-1.5 font-mono text-[11px] text-white placeholder:text-white/30 focus:border-white/40 focus:outline-none"
+            />
+            <button
+              type="submit"
+              data-testid="byok-save-btn"
+              className="rounded-md bg-white px-3 py-1.5 text-[11px] font-medium text-black hover:bg-white/90"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="rounded-md border border-white/15 px-2 py-1.5 text-[11px] text-white/70 hover:bg-white/10"
+            >
+              Cancel
+            </button>
+          </div>
+          {error && <p className="text-[10px] text-red-300">{error}</p>}
+          <p className="text-[10px] text-white/40">
+            Get one at{" "}
+            <a
+              className="underline"
+              href="https://reactor.inc/account/api-keys"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              reactor.inc/account/api-keys
+            </a>
+            .
+          </p>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -308,6 +457,7 @@ function DreamSurface() {
           >
             Begin
           </button>
+          <ByokKeyField />
           <p className="mt-6 text-[10px] uppercase tracking-wider text-white/40">
             Powered by Reactor · LingBot
           </p>
@@ -749,6 +899,29 @@ function ReactorErrorScreen({
     bustNextToken();
     onRetry();
   };
+  // M9.12: on 402, the user might want to paste their own Reactor
+  // key (BYOK). If they don't have the dashboard open in another
+  // tab, this is the fastest path to a working session. The
+  // server's X-Reactor-User-Key path (M9.12) will use the new key
+  // on the next /api/reactor/token call.
+  const [showByokPaste, setShowByokPaste] = useState(false);
+  const [byokDraft, setByokDraft] = useState("");
+  const [byokError, setByokError] = useState<string | null>(null);
+  const onByokSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const v = byokDraft.trim();
+    if (!v) return;
+    const ok = _saveUserKey(v);
+    if (!ok) {
+      setByokError("That doesn't look like a Reactor key (rk_<40+ chars).");
+      return;
+    }
+    setByokError(null);
+    setByokDraft("");
+    setShowByokPaste(false);
+    bustNextToken();
+    onRetry();
+  };
   return (
     <div
       role="alert"
@@ -788,6 +961,45 @@ function ReactorErrorScreen({
         >
           Try a different key
         </button>
+      )}
+      {showFallbackKeyRetry && !showByokPaste && (
+        <button
+          type="button"
+          onClick={() => setShowByokPaste(true)}
+          className="mt-2 block w-full text-[10px] text-white/45 underline-offset-2 hover:text-white/75 hover:underline"
+          data-testid="reactor-error-byok-open"
+        >
+          Paste your own key
+        </button>
+      )}
+      {showFallbackKeyRetry && showByokPaste && (
+        <form onSubmit={onByokSubmit} className="mt-3 flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={byokDraft}
+              onChange={(e) => {
+                setByokDraft(e.target.value);
+                setByokError(null);
+              }}
+              placeholder="rk_…"
+              autoComplete="off"
+              spellCheck={false}
+              data-testid="reactor-error-byok-input"
+              className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/40 px-2 py-1.5 font-mono text-[11px] text-white placeholder:text-white/30 focus:border-white/40 focus:outline-none"
+            />
+            <button
+              type="submit"
+              data-testid="reactor-error-byok-save"
+              className="rounded-md bg-white px-3 py-1.5 text-[11px] font-medium text-black hover:bg-white/90"
+            >
+              Save & retry
+            </button>
+          </div>
+          {byokError && (
+            <p className="text-[10px] text-red-300">{byokError}</p>
+          )}
+        </form>
       )}
       <button
         type="button"
