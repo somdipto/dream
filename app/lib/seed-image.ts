@@ -47,11 +47,15 @@ export function hash32(s: string): number {
 /** Pick a near-monochrome palette deterministically from a string. */
 export function paletteFromString(s: string): SeedPalette {
   const h = hash32(s || String(Math.random()));
-  // Single base hue, shifted ±15° between top and bottom (very subtle).
+  // Bright base: lightness 70-80, saturation 45-60. The model anchors
+  // to the seed image's colour — a near-flat DARK gradient was making
+  // every hyperreal preset land as a moody night shot. Keep the
+  // gradient subtle (top→bottom 5% lightness) but push the absolute
+  // brightness into a daylight range so the model anchors brighter.
   const base = h % 360;
   return {
-    top: hsl(base, 30, 50),
-    bottom: hsl((base + 15 + (h >> 8) % 15) % 360, 30, 45),
+    top: hsl(base, 50, 78),
+    bottom: hsl((base + 15 + (h >> 8) % 15) % 360, 45, 72),
   };
 }
 

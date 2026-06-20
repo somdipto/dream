@@ -29,17 +29,23 @@ export const STYLE_PRESETS: StylePreset[] = [
     // LingBot toward the Geodiffusion / world-realism aesthetic:
     // global illumination, tonemapped natural light, raytraced GI,
     // 35mm-equivalent DOF, ground-truth color.
+    //
+    // The previous version ended on "no stylization" which gave the
+    // model implicit permission to interpret the prompt as a moody
+    // daylight shot. Users reported the result as "very dark". We
+    // now spell out bright daylight + vibrant colors explicitly so
+    // the model anchors toward a well-lit scene, not a noir shot.
     id: "hyperreal",
     label: "Hyper-Real",
     emoji: "✨",
-    suffix: "hyperrealistic photograph, global illumination, raytraced, ground-truth color, natural lighting, 35mm lens, shallow depth of field, 8K, physically based rendering, sharp focus, no stylization",
+    suffix: "hyperrealistic photograph, bright golden-hour daylight, vibrant natural color, global illumination, raytraced, ground-truth color, soft 35mm lens, shallow depth of field, 8K, physically based rendering, sharp focus, vivid saturated tones",
     conflictsWith: ["watercolor", "vaporwave"],
   },
   {
     id: "photoreal",
     label: "Photoreal",
     emoji: "📷",
-    suffix: "photorealistic, 8K, cinematic lighting, shallow depth of field",
+    suffix: "photorealistic, bright natural daylight, 8K, cinematic lighting, vibrant color, shallow depth of field",
     conflictsWith: ["watercolor", "vaporwave"],
   },
   {
