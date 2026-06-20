@@ -185,6 +185,7 @@ export function VoiceDream() {
       setPulse((p) => p + 1);
       setPhase("loading");
 
+      const paintStart = Date.now();
       const seed = (opts?.seed ?? hashSeed(text + ":" + sessionNonceRef.current.toString(16))) >>> 0;
       setLastSeed(seed);
 
@@ -279,6 +280,10 @@ export function VoiceDream() {
       if (result === "ok") {
         setPhase("live");
         setError(null);
+        // QA3: surface the paint duration so the StatusBadge
+        // can show "Last paint: 4.2s" — a healthy-paint signal
+        // the user can read at a glance.
+        dreamBus.emit("dream:paintDone", { ms: Date.now() - paintStart });
       } else if (result === "err") {
         setError("Generation failed — your prompt is saved, try again in a moment");
         if (!generating) setPhase("idle");

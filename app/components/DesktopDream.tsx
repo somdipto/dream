@@ -159,6 +159,7 @@ export function DesktopDream() {
       setLastPrompt(t);
       setPhase("loading");
 
+      const paintStart = Date.now();
       const seed = (opts?.seed ?? hashSeed(t + ":" + sessionNonceRef.current.toString(16))) >>> 0;
       setLastSeed(seed);
 
@@ -245,6 +246,8 @@ export function DesktopDream() {
       if (result === "ok") {
         setPhase("live");
         setError(null);
+        // QA3: paint duration for the StatusBadge.
+        dreamBus.emit("dream:paintDone", { ms: Date.now() - paintStart });
       } else if (result === "err") {
         setError("Generation failed — your prompt is saved, try again in a moment");
         if (!generating) setPhase("idle");

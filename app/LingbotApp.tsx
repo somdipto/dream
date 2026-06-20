@@ -309,6 +309,46 @@ function BlackScreenMemoryChip() {
 }
 
 // ---------------------------------------------------------------------------
+// QA3: PromptHistoryChips — a horizontal scrollable strip of
+// recent prompts the user has spoken or typed, newest first.
+// Tapping a chip re-uses that prompt (with a fresh seed) so
+// the user can re-roll a scene they liked without re-typing.
+//
+// Hidden when there are no prompts yet. The strip is keyboard
+// scrollable on desktop.
+// ---------------------------------------------------------------------------
+function PromptHistoryChips({
+  prompts,
+  onPick,
+}: {
+  prompts: { prompt: string; seed: number; timestamp: number }[];
+  onPick: (p: { prompt: string; seed: number }) => void;
+}) {
+  if (prompts.length === 0) return null;
+  return (
+    <div className="mt-3 w-full max-w-md" data-testid="prompt-history">
+      <p className="text-[10px] uppercase tracking-wider text-white/45">
+        Recent
+      </p>
+      <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+        {prompts.slice(0, 5).map((p, i) => (
+          <button
+            key={`${p.timestamp}-${i}`}
+            type="button"
+            onClick={() => onPick({ prompt: p.prompt, seed: p.seed })}
+            className="shrink-0 max-w-[180px] truncate rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] text-white/80 hover:bg-white/15"
+            title={p.prompt}
+            data-testid="prompt-history-chip"
+          >
+            {p.prompt}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // QA2: NewSessionConfirmModal — replaces window.confirm on the
 // "+ New session" button. In-app modal that respects the design
 // language, traps focus, dismisses with Esc, and looks the same
@@ -660,6 +700,17 @@ function DreamSurface() {
               {sessions.sessions.length} saved dream{sessions.sessions.length === 1 ? "" : "s"} on this device.
             </p>
           )}
+          {/* QA3: recent prompts as scrollable chips. Tapping a
+              chip starts a session and re-uses that prompt. */}
+          <PromptHistoryChips
+            prompts={sessions.recentPrompts()}
+            onPick={({ prompt, seed }) => {
+              sessions.createSession({ title: prompt.slice(0, 60), seed: { prompt, seed } });
+              setHasBegun(true);
+              if (status === "disconnected") void connect();
+              dreamBus.emit("dream:loadScene", { prompt, seed });
+            }}
+          />
           <button
             onClick={handleBegin}
             data-testid="begin-btn"

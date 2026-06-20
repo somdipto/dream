@@ -37,6 +37,10 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
   const store = useSessions();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [tab, setTab] = useState<"sessions" | "discover">("sessions");
+  // QA3: when true, the Sessions list shows ONLY scenes marked
+  // as favorites (across all sessions). Toggled by a small chip
+  // next to the Sessions tab.
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   // Undo-stack for delete-with-undo. Stores the removed session so we
   // can restore it on Undo tap. Cleared by timeout or by a new delete.
   const [pendingDelete, setPendingDelete] = useState<{
@@ -60,7 +64,18 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
   const previouslyFocusedRef = useRef<Element | null>(null);
 
   const isDesktop = platform.isDesktop;
-  const sorted = [...store.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+  // QA3: when favoritesOnly is true, sessions that have zero
+  // favorited scenes are hidden. The remaining sessions keep
+  // their sort order (most-recently-updated first).
+  const sorted = [...store.sessions]
+    .filter((s) =>
+      favoritesOnly ? s.scenes.some((sc) => sc.favorite) : true,
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const favoriteCount = store.sessions.reduce(
+    (acc, s) => acc + s.scenes.filter((sc) => sc.favorite).length,
+    0,
+  );
 
   // Cleanup the undo timer when the sidebar closes.
   useEffect(() => {
@@ -244,6 +259,25 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
               Discover
             </button>
           </div>
+          {/* QA3: Favorites filter — only shown on the Sessions
+              tab so it doesn't overlap the Curated gallery. */}
+          {tab === "sessions" ? (
+            <button
+              type="button"
+              onClick={() => setFavoritesOnly((v) => !v)}
+              aria-pressed={favoritesOnly}
+              aria-label={favoritesOnly ? "Show all scenes" : "Show favorites only"}
+              data-testid="favorites-toggle"
+              className={[
+                "grid h-9 w-9 place-items-center rounded-full border text-xs",
+                favoritesOnly
+                  ? "border-pink-300/50 bg-pink-500/20 text-pink-200"
+                  : "border-white/10 bg-white/5 text-white/55 hover:bg-white/10",
+              ].join(" ")}
+            >
+              {favoritesOnly ? "♥" : "♡"}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -267,22 +301,32 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
             {sorted.length === 0 ? (
               <div className="px-3 py-8 text-center">
                 <p className="text-sm text-white/50">
-                  No saved dreams yet.
+                  {favoritesOnly
+                    ? "No favorites yet."
+                    : "No saved dreams yet."}
                 </p>
                 <p className="mt-1 text-xs text-white/40">
-                  Paint or speak a scene and it will save here automatically.
+                  {favoritesOnly
+                    ? "Tap the heart on any scene to add it here."
+                    : "Paint or speak a scene and it will save here automatically."}
                 </p>
               </div>
             ) : (
-              sorted.map((s) => (
-                <SessionCard
-                  key={s.id}
-                  session={s}
-                  isActive={s.id === store.activeSessionId}
-                  isExpanded={expanded === s.id}
-                  onToggle={() => setExpanded(expanded === s.id ? null : s.id)}
-                  onLoad={() => {
-                    store.loadSession(s.id);
+              <>
+                {favoritesOnly && favoriteCount > 0 && (
+                  <p className="px-3 pb-2 text-[10px] uppercase tracking-wider text-pink-300/80">
+                    {favoriteCount} favorite{favoriteCount === 1 ? "" : "s"}
+                  </p>
+                )}
+                {sorted.map((s) => (
+                  <SessionCard
+                    key={s.id}
+                    session={s}
+                    isActive={s.id === store.activeSessionId}
+                    isExpanded={expanded === s.id}
+                    onToggle={() => setExpanded(expanded === s.id ? null : s.id)}
+                    onLoad={() => {
+                      store.loadSession(s.id);
                     // Re-paint the most recent scene of this session.
                     // Audit bug #25.
                     const last = s.scenes[s.scenes.length - 1];
@@ -295,8 +339,10 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
                   onSelectScene={(sceneId) => {
                     onSelectScene?.(s.id, sceneId);
                   }}
+                  onToggleFavorite={(sceneId) => store.toggleFavorite(sceneId, s.id)}
                 />
-              ))
+                ))}
+              </>
             )}
           </div>
         )}
@@ -345,6 +391,7 @@ function SessionCard({
   onRename,
   onRemoveScene,
   onSelectScene,
+  onToggleFavorite,
 }: {
   session: Session;
   isActive: boolean;
@@ -355,6 +402,7 @@ function SessionCard({
   onRename: (title: string) => void;
   onRemoveScene: (sceneId: string) => void;
   onSelectScene: (sceneId: string) => void;
+  onToggleFavorite: (sceneId: string) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState(session.title);
@@ -463,6 +511,21 @@ function SessionCard({
                   <p className="mt-0.5 text-[10px] text-white/40">
                     {new Date(scene.timestamp).toLocaleString()}
                   </p>
+                </button>
+                {/* QA3: heart toggle. Favorited scenes show in
+                    a separate section above the regular list
+                    and survive across sessions. */}
+                <button
+                  type="button"
+                  onClick={() => onToggleFavorite(scene.id)}
+                  aria-label={scene.favorite ? "Unfavorite scene" : "Favorite scene"}
+                  aria-pressed={!!scene.favorite}
+                  data-testid="scene-favorite"
+                  className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs hover:bg-white/10 ${
+                    scene.favorite ? "text-pink-300" : "text-white/40"
+                  }`}
+                >
+                  {scene.favorite ? "♥" : "♡"}
                 </button>
                 <button
                   type="button"
