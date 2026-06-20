@@ -51,6 +51,16 @@ export interface VoiceControls extends VoiceState {
   commit: () => string | null;
   /** Clear `final` so the next commit starts fresh. */
   reset: () => void;
+  /**
+   * Register a handler that fires on every speech-recognition `isFinal`
+   * result. The handler receives the full buffered transcript at the
+   * moment the engine commits a final. The handler is also called by
+   * the silence-flush auto-commit. Use this to wire the recognition
+   * results directly into the world (no manual "Send" required).
+   *
+   * The function returns an unsubscribe handle.
+   */
+  onFinal: (cb: (text: string) => void) => () => void;
 }
 
 const SILENCE_MS = 1500;
@@ -70,6 +80,7 @@ export function useVoice(): VoiceControls {
   const shouldListenRef = useRef(false);
   const bufferRef = useRef("");
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const finalListenersRef = useRef<Set<(text: string) => void>>(new Set());
 
   const flushSilence = useCallback(() => {
     if (silenceTimerRef.current) {
@@ -78,17 +89,28 @@ export function useVoice(): VoiceControls {
     }
   }, []);
 
+  /** Internal: commit `bufferRef` as final, notify listeners, reset state. */
+  const commitBufferAsFinal = useCallback(() => {
+    const text = bufferRef.current.trim();
+    if (!text) return;
+    setFinal(text);
+    bufferRef.current = "";
+    setInterim("");
+    finalListenersRef.current.forEach((cb) => {
+      try {
+        cb(text);
+      } catch {
+        // ponytail: a listener error must not stop other listeners.
+      }
+    });
+  }, []);
+
   const armSilenceFlush = useCallback(() => {
     flushSilence();
     silenceTimerRef.current = setTimeout(() => {
-      const text = bufferRef.current.trim();
-      if (text) {
-        setFinal(text);
-        bufferRef.current = "";
-        setInterim("");
-      }
+      commitBufferAsFinal();
     }, SILENCE_MS);
-  }, [flushSilence]);
+  }, [flushSilence, commitBufferAsFinal]);
 
   const start = useCallback(() => {
     if (!supported) {
@@ -122,6 +144,9 @@ export function useVoice(): VoiceControls {
       if (liveFinal) {
         // ponytail: `liveFinal` may not include trailing space — preserve buffer order.
         bufferRef.current = (bufferRef.current + " " + liveFinal).trim();
+        // Engine committed a final — fire listeners immediately so the
+        // world can mutate without waiting for the silence flush.
+        commitBufferAsFinal();
       }
       // ponytail: interim is what the engine *currently* thinks the user said.
       // We expose the *combined* (buffer + live interim) so the UI shows
@@ -192,12 +217,9 @@ export function useVoice(): VoiceControls {
     flushSilence();
     const text = (bufferRef.current + (interim ? " " + interim : "")).trim();
     if (!text) return null;
-    setFinal(text);
-    bufferRef.current = "";
-    setInterim("");
-    // ponytail: keep the recogniser running so the user can speak again.
+    commitBufferAsFinal();
     return text;
-  }, [interim, flushSilence]);
+  }, [interim, flushSilence, commitBufferAsFinal]);
 
   const reset = useCallback(() => {
     setFinal(null);
@@ -205,6 +227,13 @@ export function useVoice(): VoiceControls {
     setInterim("");
     flushSilence();
   }, [flushSilence]);
+
+  const onFinal = useCallback((cb: (text: string) => void) => {
+    finalListenersRef.current.add(cb);
+    return () => {
+      finalListenersRef.current.delete(cb);
+    };
+  }, []);
 
   // Cleanup on unmount.
   useEffect(() => {
@@ -233,5 +262,6 @@ export function useVoice(): VoiceControls {
     stop,
     commit,
     reset,
+    onFinal,
   };
 }

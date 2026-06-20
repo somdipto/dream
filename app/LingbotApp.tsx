@@ -39,10 +39,23 @@ function DreamSurface() {
   // denies if the call happens outside the gesture window. We keep
   // `handleBegin` synchronous up to and including the call into
   // `requestPermission()`; the result is fire-and-forget.
+  //
+  // Voice is also armed here so the user doesn't have to tap a separate
+  // mic button once the world is ready. VoiceDream will auto-start the
+  // recogniser when `status === "ready"`, but we also arm it inside the
+  // gesture so iOS doesn't reject the start() call later.
   const handleBegin = useCallback(() => {
-    // Synchronous first-line: invoke the iOS gate inside the gesture.
+    // Synchronous first-line: invoke the iOS gates inside the gesture.
     if (motion.permission === "default") {
       void motion.requestPermission();
+    }
+    if (voice.supported && !voice.listening) {
+      try {
+        voice.start();
+      } catch {
+        // ponytail: iOS may reject the gesture-scoped start. VoiceDream
+        // has a fallback effect that starts the recogniser once `ready`.
+      }
     }
     setHasBegun(true);
     if (status === "disconnected") {
@@ -56,9 +69,10 @@ function DreamSurface() {
         // ponytail: orientation lock can reject on iOS without PWA install.
       }
     }
-  }, [motion, status, connect]);
+  }, [motion, voice, status, connect]);
 
   const handleReset = useCallback(() => {
+    voice.stop();
     void disconnect();
     setHasBegun(false);
     voice.reset();
@@ -79,10 +93,11 @@ function DreamSurface() {
       <main className="relative grid min-h-screen place-items-center bg-black p-6 text-white">
         <div className="max-w-sm text-center">
           <h1 className="text-2xl font-semibold tracking-tight">
-            See your dreams in real
+            Speak your dream into the world.
           </h1>
           <p className="mt-2 text-sm text-white/60">
-            Speak a scene. Walk through it by tilting your phone.
+            Say a scene out loud. Tilt to walk through it. Every phrase you speak
+            mutates the world in place.
           </p>
           <button
             onClick={handleBegin}
