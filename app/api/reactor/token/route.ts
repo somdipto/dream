@@ -32,6 +32,10 @@ const UPSTREAM_TIMEOUT_MS = 8000;
 // row succeeds; anything more gets a 429 until the bucket refills.
 const RATE_LIMIT_BURST = 5;
 const RATE_LIMIT_REFILL_MS = 10_000;
+// Evict bucket entries that haven't been touched for this long. Keeps
+// the map from growing unbounded under a scripted scan across many
+// IPs (each new IP would otherwise add an entry that lives forever).
+const BUCKET_TTL_MS = 10 * 60 * 1000;
 const buckets = new Map<string, { tokens: number; updatedAt: number }>();
 
 function takeToken(ip: string): boolean {
@@ -48,12 +52,33 @@ function takeToken(ip: string): boolean {
   return true;
 }
 
-function clientIp(headers: Headers): string {
-  return (
-    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    headers.get("x-real-ip") ||
-    "unknown"
-  );
+// Periodic sweep of stale bucket entries. Started lazily on the first
+// request (a top-level setInterval would keep the process alive; the
+// unref below makes that not happen). Idempotent: safe to call many
+// times.
+let sweepStarted = false;
+function ensureSweep() {
+  if (sweepStarted) return;
+  sweepStarted = true;
+  const interval = setInterval(() => {
+    const cutoff = Date.now() - BUCKET_TTL_MS;
+    for (const [ip, b] of buckets) {
+      if (b.updatedAt < cutoff) buckets.delete(ip);
+    }
+  }, 60_000);
+  if (typeof interval.unref === "function") interval.unref();
+}
+
+// Trust X-Forwarded-For only if we are explicitly behind a reverse
+// proxy (set TRUST_PROXY=1). Without that flag, the header is fully
+// client-controlled and trusting it lets a single attacker mint
+// unlimited tokens by rotating the header on each request.
+function clientIp(headers: Headers, trustProxy: boolean): string {
+  if (trustProxy) {
+    const fwd = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    if (fwd) return fwd;
+  }
+  return headers.get("x-real-ip") || "unknown";
 }
 
 interface TokenSuccess {
@@ -143,7 +168,8 @@ async function mintToken(apiKey: string): Promise<TokenSuccess | TokenFailure> {
 //   the cache window is always in sync with whatever the server
 //   actually granted, with a one-minute safety skew baked in.
 export async function GET(req: Request) {
-  const ip = clientIp(req.headers);
+  ensureSweep();
+  const ip = clientIp(req.headers, process.env.TRUST_PROXY === "1");
   if (!takeToken(ip)) {
     return NextResponse.json(
       { error: "Too many token requests — slow down" },
