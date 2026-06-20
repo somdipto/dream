@@ -76,7 +76,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-black text-zinc-100 antialiased">
+      {/* M9.14: bg-black → bg-[#0a0a14] for the warmer theme
+          (matching the Begin + connecting overlays). The
+          0x14 channel keeps the page dark but not a void —
+          a friendlier surface during the brief moment between
+          layout paint and the overlay's own background taking
+          over. */}
+      <body className="min-h-screen bg-[#0a0a14] text-zinc-100 antialiased">
         {children}
       </body>
     </html>
