@@ -109,16 +109,19 @@ function ensureSweep() {
   if (typeof interval.unref === "function") interval.unref();
 }
 
-// Trust X-Forwarded-For only if we are explicitly behind a reverse
-// proxy (set TRUST_PROXY=1). Without that flag, the header is fully
-// client-controlled and trusting it lets a single attacker mint
-// unlimited tokens by rotating the header on each request.
+// Trust X-Forwarded-For AND X-Real-IP only if we are explicitly
+// behind a reverse proxy (set TRUST_PROXY=1). Without that flag,
+// both headers are fully client-controlled; trusting them lets a
+// single attacker mint unlimited tokens by rotating the header on
+// each request (the rate-limit bucket keys on IP).
 function clientIp(headers: Headers, trustProxy: boolean): string {
   if (trustProxy) {
     const fwd = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
     if (fwd) return fwd;
+    const real = headers.get("x-real-ip")?.trim();
+    if (real) return real;
   }
-  return headers.get("x-real-ip") || "unknown";
+  return "unknown";
 }
 
 // ---------------------------------------------------------------------------
@@ -142,9 +145,19 @@ class KeyPool {
    *  Used to short-circuit subsequent requests with a 503 so the
    *  client doesn't trigger N+1 upstream calls on a hot page. */
   allKeysExhaustedAt = 0;
+  /** Fingerprint of the env var that produced the current keys.
+   *  Used to detect hot-rotated keys without a process restart. */
+  _envFingerprint = "";
 
   load(env: NodeJS.ProcessEnv): { count: number; legacy: boolean } {
-    if (this.keys.length > 0) return { count: this.keys.length, legacy: false };
+    // QA2: refresh from env if the env value changed since the
+    // last load (e.g. dev added a key to .env without restart).
+    // Without this, hot key rotation silently ignored.
+    const currentEnv = (env.REACTOR_API_KEYS ?? env.REACTOR_API_KEY ?? "").trim();
+    const currentFingerprint = currentEnv ? fingerprintEnv(currentEnv) : "";
+    if (this.keys.length > 0 && this._envFingerprint === currentFingerprint) {
+      return { count: this.keys.length, legacy: false };
+    }
     const list = (env.REACTOR_API_KEYS ?? "").trim();
     if (list) {
       const arr = list
@@ -158,6 +171,7 @@ class KeyPool {
           lastError: null,
         }));
         this._raw = arr;
+        this._envFingerprint = currentFingerprint;
         return { count: arr.length, legacy: false };
       }
     }
@@ -167,6 +181,7 @@ class KeyPool {
         { fingerprint: fingerprintKey(single), exhaustedUntil: null, lastError: null },
       ];
       this._raw = [single];
+      this._envFingerprint = currentFingerprint;
       return { count: 1, legacy: true };
     }
     this._raw = [];
@@ -202,6 +217,14 @@ function fingerprintKey(k: string): string {
   // secret to anyone who reads the deploy logs.
   if (k.length <= 4) return "***";
   return "***" + k.slice(-4);
+}
+
+/** Deterministic fingerprint of an env value (a comma-separated key
+ *  list, or a single key). Used to detect hot-rotated keys without
+ *  exposing the full secret. */
+function fingerprintEnv(env: string): string {
+  const parts = env.split(",").map((s) => s.trim()).filter(Boolean);
+  return parts.map(fingerprintKey).join("|");
 }
 
 const USER_KEY_SHAPE = /^rk_[A-Za-z0-9]{30,120}$/;
