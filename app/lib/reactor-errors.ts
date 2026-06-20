@@ -77,17 +77,19 @@ export function classifyReactorError(message: string | null | undefined): Classi
   if (m.includes("failed to fetch") || m.includes("networkerror") || m.includes("econn")) {
     return { ...KNOWN.network };
   }
+  // M9.7: the server's key-pool returns 503 with these exact messages
+  // when every configured key is parked. Check BEFORE the auth
+  // branch — the message contains the substring "api keys" which
+  // would otherwise match the auth check below and misroute a
+  // pool-exhaustion to "API key rejected" (audit bug: classifier
+  // substring match was too greedy).
+  if (m.includes("all api keys are temporarily exhausted") || m.includes("all api keys failed")) {
+    return { ...KNOWN.service_unavailable };
+  }
   if (m.includes("401") || m.includes("unauthorized") || m.includes("api key")) {
     return { ...KNOWN.auth };
   }
   if (m.includes("503") || m.includes("service unavailable") || m.includes("temporarily unavailable")) {
-    return { ...KNOWN.service_unavailable };
-  }
-  // M9.7: the server's key-pool returns 503 with this exact message
-  // when every configured key is parked. Treat as service_unavailable
-  // so the user sees the friendly "Reactor is temporarily unavailable"
-  // copy instead of the generic "Something went wrong".
-  if (m.includes("all api keys are temporarily exhausted") || m.includes("all api keys failed")) {
     return { ...KNOWN.service_unavailable };
   }
   return {
