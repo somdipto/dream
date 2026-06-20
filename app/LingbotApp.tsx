@@ -20,6 +20,7 @@ import { generateSeedImage } from "./lib/seed-image";
 import { composeScenePrompt } from "./lib/scene-composer";
 import { dailyDream, dailyDreamTitle } from "./lib/curated-scenes";
 import { dreamBus } from "./lib/event-bus";
+import { classifyReactorError } from "./lib/reactor-errors";
 
 async function fetchToken(): Promise<string> {
   const r = await fetch("/api/reactor/token");
@@ -190,17 +191,15 @@ function DreamSurface() {
     return () => clearTimeout(t);
   }, [status, hasBegun, lastError, connect]);
 
-  // Before Begin: friendly landing overlay.
+  // Before Begin: friendly landing overlay. Pure black per the
+  // M9.6 design pass — the user prefers a clean, quiet landing
+  // surface. The aurora gradient still lives on the *connecting*
+  // interstitial (see below) so the "hard black screen" bug
+  // reported in M8.4 stays fixed: the user never sees a black
+  // surface while the SDK is actively trying to connect.
   if (!hasBegun) {
     return (
-      <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0612] p-6 text-white">
-        {/* Aurora — same gradient as connecting state and Video.tsx,
-            so the user never sees a hard black screen anywhere in
-            the app. */}
-        <div
-          className="pointer-events-none absolute inset-0 animate-[aurora-shift_18s_ease-in-out_infinite] bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.55),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(236,72,153,0.45),transparent_55%),radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.40),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(168,85,247,0.40),transparent_55%)] bg-[length:200%_200%]"
-          aria-hidden="true"
-        />
+      <main className="relative grid min-h-screen place-items-center overflow-hidden bg-black p-6 text-white">
         {/* Recovery banner — surfaces if the previous storage blob was
             unreadable. Gives the user a chance to restore before we
             silently lose the journal. (Audit bug #30.)
@@ -399,48 +398,75 @@ function DreamSurface() {
 // Video.tsx aurora background so the user sees a beautiful animated
 // gradient while waiting, not a black void.
   if (status === "disconnected" || status === "connecting" || status === "waiting") {
+    // If we have a classified error (a real Reactor-side failure,
+    // not just a transient blip), render the dedicated error screen.
+    // The classifier turns raw JSON like
+    //   "Failed to create session: 402 {\"error\":\"credits_depleted\"..."
+    // into a typed reason + short message + CTA.
+    const classified =
+      status === "disconnected" && lastError
+        ? classifyReactorError(lastError.message)
+        : null;
+    const isKnownError = classified && classified.reason !== "unknown";
+    // Aurora is shown ONLY while the SDK is actively trying to
+    // connect (no classified error). On a terminal error, fall back
+    // to a quiet black surface so the user can focus on the
+    // message and CTA — the design pass in M9.6 prefers that over
+    // a busy gradient behind the error text.
+    const showAurora = !isKnownError;
     return (
       <>
         {topbar}
         {sidebar}
-        <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0612] p-6 text-white">
+        <main className="relative grid min-h-screen place-items-center overflow-hidden bg-black p-6 text-white">
           {/* Aurora background — same gradient as Video.tsx so the
               transition from connecting → playing is seamless, with
-              no hard black cut. */}
-          <div
-            className="pointer-events-none absolute inset-0 animate-[aurora-shift_18s_ease-in-out_infinite] bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.55),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(236,72,153,0.45),transparent_55%),radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.40),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(168,85,247,0.40),transparent_55%)] bg-[length:200%_200%]"
-            aria-hidden="true"
-            data-testid="connect-aurora"
-          />
-          <div className="relative max-w-sm text-center">
-            <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-amber-400" />
-            <p className="mt-4 text-sm text-white/85">
-              {status === "disconnected"
-                ? lastError
-                  ? `Couldn't connect: ${lastError.message}`
-                  : "Reconnecting…"
-                : status === "connecting"
-                  ? "Connecting to Reactor…"
-                  : "Waiting for a GPU…"}
-            </p>
-            <p className="mt-1 text-xs text-white/55">
-              This usually takes 5–15 seconds.
-            </p>
-            {lastError && (
+              no hard black cut. (M8.4 bug fix; only rendered while
+              we're actively connecting — see showAurora above.) */}
+          {showAurora && (
+            <div
+              className="pointer-events-none absolute inset-0 animate-[aurora-shift_18s_ease-in-out_infinite] bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.55),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(236,72,153,0.45),transparent_55%),radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.40),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(168,85,247,0.40),transparent_55%)] bg-[length:200%_200%]"
+              aria-hidden="true"
+              data-testid="connect-aurora"
+            />
+          )}
+          {isKnownError && classified ? (
+            <ReactorErrorScreen
+              classified={classified}
+              onRetry={() => void connect()}
+              onBack={handleReset}
+            />
+          ) : (
+            <div className="relative max-w-sm text-center">
+              <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+              <p className="mt-4 text-sm text-white/85">
+                {status === "disconnected"
+                  ? lastError
+                    ? "Couldn't connect — try again in a moment."
+                    : "Reconnecting…"
+                  : status === "connecting"
+                    ? "Connecting to Reactor…"
+                    : "Waiting for a GPU…"}
+              </p>
+              <p className="mt-1 text-xs text-white/55">
+                This usually takes 5–15 seconds.
+              </p>
+              {lastError && (
+                <button
+                  onClick={() => void connect()}
+                  className="mt-6 rounded-full bg-white/15 px-5 py-2 text-sm font-medium text-white hover:bg-white/25"
+                >
+                  Try again
+                </button>
+              )}
               <button
-                onClick={() => void connect()}
-                className="mt-6 rounded-full bg-white/15 px-5 py-2 text-sm font-medium text-white hover:bg-white/25"
+                onClick={handleReset}
+                className="mt-3 block w-full text-[10px] uppercase tracking-wider text-white/45 hover:text-white/70"
               >
-                Try again
+                Back
               </button>
-            )}
-            <button
-              onClick={handleReset}
-              className="mt-3 block w-full text-[10px] uppercase tracking-wider text-white/45 hover:text-white/70"
-            >
-              Back
-            </button>
-          </div>
+            </div>
+          )}
         </main>
       </>
     );
@@ -627,6 +653,74 @@ function RestoreButton({
       )}
       {restoring ? "Restoring…" : "Restore"}
     </button>
+  );
+}
+
+// Full-screen error overlay rendered when Reactor returns a typed
+// failure (e.g. 402 credits_depleted, 401 bad API key, 503 down).
+// The raw error message used to be dumped here as
+//   "Couldn't connect: Failed to create session: 402 {json}"
+// — unreadable to a real user. We now classify the message and
+// show a clear headline + body + the right CTA.
+//
+// The Back button returns the user to the Begin overlay, which
+// keeps the journal sidebar reachable offline (sessions live in
+// localStorage, not in Reactor).
+function ReactorErrorScreen({
+  classified,
+  onRetry,
+  onBack,
+}: {
+  classified: import("./lib/reactor-errors").ClassifiedReactorError;
+  onRetry: () => void;
+  onBack: () => void;
+}) {
+  // The credits_depleted CTA points at the dashboard and should
+  // open in a new tab (we don't want to navigate away from the
+  // app entirely — the user may want to come back and replay
+  // their journal).
+  const ctaIsExternal = !!classified.ctaHref;
+  const ctaOnClick = classified.ctaHref
+    ? () => window.open(classified.ctaHref!, "_blank", "noopener,noreferrer")
+    : onRetry;
+  return (
+    <div
+      role="alert"
+      aria-live="assertive"
+      className="relative max-w-md text-center"
+      data-testid={`reactor-error-${classified.reason}`}
+    >
+      <div className="mx-auto grid h-12 w-12 place-items-center rounded-full border border-white/15 bg-white/5">
+        <span aria-hidden="true" className="text-2xl">
+          {classified.reason === "credits_depleted" ? "✕" : "!"}
+        </span>
+      </div>
+      <h1 className="mt-5 text-2xl font-semibold tracking-tight">
+        {classified.title}
+      </h1>
+      <p className="mt-3 text-sm leading-relaxed text-white/70">
+        {classified.body}
+      </p>
+      {classified.ctaLabel && (
+        <button
+          type="button"
+          onClick={ctaOnClick}
+          className="mt-7 inline-flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-medium text-black hover:bg-white/90"
+        >
+          {classified.ctaLabel}
+          {ctaIsExternal && (
+            <span aria-hidden="true" className="text-xs">↗</span>
+          )}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onBack}
+        className="mt-4 block w-full text-[10px] uppercase tracking-wider text-white/45 hover:text-white/70"
+      >
+        Back to start
+      </button>
+    </div>
   );
 }
 
