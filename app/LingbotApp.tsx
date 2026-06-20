@@ -332,8 +332,11 @@ function DesktopDefaultScene({
         await start();
         // Save the default as the first scene of the active session.
         sessions.addScene({ prompt, seed });
-      } catch {
-        // non-fatal
+        // eslint-disable-next-line no-console
+        console.log("[ss] DesktopDefaultScene addScene fired");
+      } catch (e: any) {
+        // eslint-disable-next-line no-console
+        console.warn("[ss] DesktopDefaultScene failed:", e?.message ?? e);
       }
     })();
   }, [enabled, prompt, hasUserScenes, setImage, setPrompt, start, uploadFile, sessions]);
