@@ -27,10 +27,22 @@ interface CuratedGalleryProps {
 // PNG = ~1.2MB of blob URLs held until the tab closes.
 // On long sessions with sidebars frequently opened/closed,
 // this matters.
+//
+// QA16: the beforeunload listener was previously registered
+// at module scope. Each HMR re-evaluation of this module
+// added a fresh listener that was never removed, so after a
+// few hot-reloads the dev tab carried N listeners and
+// navigated with N revoke-loops. We now keep a singleton
+// registration via a module-level flag, and also expose a
+// `teardownThumbs()` helper for tests and explicit cleanup.
 const thumbCache = new Map<number, string>();
 const pendingSeeds = new Set<number>();
+let beforeunloadInstalled = false;
 
-if (typeof window !== "undefined") {
+function installBeforeUnloadOnce() {
+  if (beforeunloadInstalled) return;
+  if (typeof window === "undefined") return;
+  beforeunloadInstalled = true;
   window.addEventListener("beforeunload", () => {
     for (const url of thumbCache.values()) {
       try {
@@ -41,6 +53,21 @@ if (typeof window !== "undefined") {
     }
     thumbCache.clear();
   });
+}
+
+installBeforeUnloadOnce();
+
+export function teardownThumbs() {
+  for (const url of thumbCache.values()) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      /* noop */
+    }
+  }
+  thumbCache.clear();
+  pendingSeeds.clear();
+  beforeunloadInstalled = false;
 }
 
 async function loadThumb(seed: number, setUrl: (s: string | null) => void) {

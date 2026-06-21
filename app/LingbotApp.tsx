@@ -1130,10 +1130,25 @@ function DreamSurface() {
     const delay = 1500 * 2 ** (retryCountRef.current - 1);
     const jitter = Math.floor(Math.random() * 250);
     const t = setTimeout(() => {
+      // QA16 retry-clearing bug: without this, `reconnectingRef`
+      // stays true forever after the retry fires, so a *second*
+      // disconnect never schedules a second retry — the cap is
+      // effectively 1 not 2. Clearing the gate inside the
+      // callback means the next effect run (driven by the
+      // subsequent status flip) gets a fresh shot.
+      reconnectingRef.current = false;
       void connect();
     }, delay + jitter);
     return () => {
       clearTimeout(t);
+      // If the effect is being torn down because we hit the cap
+      // (retryCountRef >= 2 blocked the next attempt), the
+      // setTimeout above never ran, so reconnectingRef is still
+      // true. Clear it so a future disconnect cycle starts
+      // fresh.
+      if (retryCountRef.current >= 2) {
+        reconnectingRef.current = false;
+      }
       // Don't clear `autoRetrying` here — the effect's cleanup
       // fires on every dependency change, including status flips,
       // which is exactly when we want the pill to stay visible.

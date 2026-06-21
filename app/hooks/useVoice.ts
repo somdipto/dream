@@ -446,8 +446,18 @@ export function useVoice(): VoiceControls {
         }
       }
       recRef.current = null;
+      // QA16: tear down the level meter too. Without this, an
+      // unmount while the recogniser is running leaves the
+      // mic stream + AudioContext open until the page is
+      // closed — the OS mic indicator stays lit and the user
+      // sees no visual feedback. This is the parallel of
+      // the .finally() in stop(); we just need it for the
+      // case where the caller never called stop() at all
+      // (component was unmounted mid-listen, e.g. a route
+      // change while the world was running).
+      stopLevelMeter();
     };
-  }, [flushSilence]);
+  }, [flushSilence, stopLevelMeter]);
 
   return {
     supported,
