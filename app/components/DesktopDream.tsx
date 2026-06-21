@@ -23,12 +23,14 @@ import {
   hasConflict,
 } from "../lib/style-presets";
 import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
+import { copyToClipboard } from "../lib/clipboard";
 import { dreamBus } from "../lib/event-bus";
 import { _takePendingDailyScene } from "../LingbotApp";
 import { parseVoiceStyle } from "../lib/voice-style-parser";
 import { captureCurrentFrame } from "../lib/pose-lock";
 import { pickSurprisePrompt } from "../lib/surprise-prompts";
 import { setDirectorState } from "../lib/director-state";
+import { ShareFallbackModal } from "./ShareFallbackModal";
 
 // Desktop equivalent of VoiceDream. Same paint pipeline (reset →
 // fresh seed image → setImage → setPrompt → start) but driven by a
@@ -63,6 +65,11 @@ export function DesktopDream() {
   const [styleId, setStyleId] = useState<string | null>(null);
   const [variantId, setVariantId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Modal that appears when both clipboard paths fail. Lets the
+  // user long-press → Copy without relying on the deprecated
+  // window.prompt() (which most mobile browsers block).
+  const [shareFallback, setShareFallback] = useState<{ url: string } | null>(null);
   // Pose Lock — when true, the next paintDream uses the captured
   // current frame as the seed image instead of a fresh noise gradient.
   const [poseLocked, setPoseLocked] = useState(false);
@@ -416,6 +423,15 @@ export function DesktopDream() {
     });
   }, []);
 
+  // Cleanup the "Copied!" flash timer on unmount. Without this,
+  // tapping Share then leaving the surface leaves a setTimeout
+  // pending that fires setState after unmount → React warns.
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    };
+  }, []);
+
   // On mount, if the URL contains a shared dream (`?d=...`), auto-paint
   // it. This is the entry point for shareable URLs.
   useEffect(() => {
@@ -625,14 +641,17 @@ export function DesktopDream() {
     const seed = lastSeed ?? hashSeed(lastPrompt + ":" + sessionNonceRef.current.toString(16)) >>> 0;
     const url = buildShareUrl(lastPrompt, seed);
     if (!url) return;
-    try {
-      await navigator.clipboard.writeText(url);
+    const result = await copyToClipboard(url);
+    if (result.ok) {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Fallback: open a prompt the user can copy from.
-      window.prompt("Copy this dream link:", url);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
+      return;
     }
+    // Both clipboard paths failed (locked-down iframe, ancient
+    // WebView, etc.). Pop a modal with the URL pre-selected so
+    // the user can long-press → Copy without fighting prompt().
+    setShareFallback({ url });
   }
 
   const showHint = !lastPrompt && phase === "idle";
@@ -876,6 +895,13 @@ export function DesktopDream() {
           Paint
         </button>
       </form>
+
+      {shareFallback && (
+        <ShareFallbackModal
+          url={shareFallback.url}
+          onClose={() => setShareFallback(null)}
+        />
+      )}
     </div>
   );
 }

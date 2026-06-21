@@ -23,11 +23,13 @@ import {
   hasConflict,
 } from "../lib/style-presets";
 import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
+import { copyToClipboard } from "../lib/clipboard";
 import { dreamBus } from "../lib/event-bus";
 import { _takePendingDailyScene } from "../LingbotApp";
 import { recordBlackScreen } from "../lib/black-screen-log";
 import { parseVoiceStyle } from "../lib/voice-style-parser";
 import { captureCurrentFrame } from "../lib/pose-lock";
+import { ShareFallbackModal } from "./ShareFallbackModal";
 import { pickSurprisePrompt } from "../lib/surprise-prompts";
 import { setDirectorState } from "../lib/director-state";
 
@@ -74,6 +76,8 @@ export function VoiceDream() {
   const [styleId, setStyleId] = useState<string | null>(null);
   const [variantId, setVariantId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [shareFallback, setShareFallback] = useState<{ url: string } | null>(null);
   const [text, setText] = useState("");
   // Pose Lock — when true, the next paint uses the captured current
   // frame as the seed image instead of a fresh noise gradient.
@@ -670,13 +674,14 @@ export function VoiceDream() {
     const seed = lastSeed ?? hashSeed(prompt + ":" + sessionNonceRef.current.toString(16)) >>> 0;
     const url = buildShareUrl(prompt, seed);
     if (!url) return;
-    try {
-      await navigator.clipboard.writeText(url);
+    const result = await copyToClipboard(url);
+    if (result.ok) {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      window.prompt("Copy this dream link:", url);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
+      return;
     }
+    setShareFallback({ url });
   }
 
   function onMicClick() {
@@ -921,6 +926,13 @@ export function VoiceDream() {
           Send
         </button>
       </form>
+
+      {shareFallback && (
+        <ShareFallbackModal
+          url={shareFallback.url}
+          onClose={() => setShareFallback(null)}
+        />
+      )}
     </div>
   );
 }
