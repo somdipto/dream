@@ -313,9 +313,7 @@ export function Video() {
         data-testid="video-aurora"
         style={{ opacity: auroraOpacity }}
       />
-      {/* The aurora-shift keyframe in globals.css is now unused but
-          kept for one release to avoid breaking any future revert
-          (CSS @keyframes don't fail builds when unused). */}
+      {/* (Aurora placeholder removed in QA17 — pure black background.) */}
 
       {/* The video itself fades in over 600ms once we have a real
           frame — LingBot's first frames are sometimes near-black,

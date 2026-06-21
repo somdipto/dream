@@ -120,23 +120,7 @@ html.cursor-hidden textarea {
   z-index: 2;
 }
 
-/* ── Aurora background ────────────────────────────────────────────
- *
- * Used by Video.tsx as the placeholder behind the world video while
- * the model is loading / connecting / generating the first frame.
- * Replaces the previous solid-black background (which made the app
- * look broken during the 5–15s paint time).
- *
- * The gradient layer is 200%×200% so the animation can pan it around
- * inside the viewport without ever revealing an edge. 18s is slow
- * enough to feel ambient, not distracting. */
-@keyframes aurora-shift {
-  0%   { background-position:   0%   0%; }
-  25%  { background-position: 100%   0%; }
-  50%  { background-position: 100% 100%; }
-  75%  { background-position:   0% 100%; }
-  100% { background-position:   0%   0%; }
-}
+/* (Aurora gradient + aurora-shift keyframe removed in QA17 — pure black theme.) */
 
 /* QA5 / F5: scene-fade pulse. Fires on every new image
    from the SDK so the world has a sense of "the painter
