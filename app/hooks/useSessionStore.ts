@@ -113,6 +113,13 @@ export function useSessionStoreImpl(): UseSessionStore {
   useEffect(() => {
     activeIdRef.current = activeId;
   }, [activeId]);
+  // QA19 fix: gate for the post-hydration skip. The first run
+  // of the save effect after hydration is a no-op (the data
+  // on disk is already what we just loaded). After that, the
+  // ref flips to true and every subsequent state change —
+  // including the empty-state-after-delete case — is
+  // persisted.
+  const hasSavedRef = useRef(false);
 
   // QA16: wrap setActiveId so every update mirrors into
   // activeIdRef synchronously. Without this, a `setActive +
@@ -141,9 +148,21 @@ export function useSessionStoreImpl(): UseSessionStore {
 
   useEffect(() => {
     if (!hydrated) return;
-    // Skip the very first save after hydration — loadFromStorage
-    // already wrote the data; we don't need to write it back verbatim.
-    if (sessions.length === 0 && activeId === null) return;
+    // QA19 fix: the previous skip `sessions.length === 0 &&
+    // activeId === null` ran on EVERY render that matched
+    // that condition, not just the hydration result. So a
+    // user who deleted their last session would have the
+    // save silently dropped — the pre-delete sessions
+    // stayed on disk and resurrected on reload. Now we
+    // skip only the very first save after hydration
+    // (loadFromStorage already wrote the data; no need to
+    // write it back verbatim). After the first user
+    // interaction the gate opens and every state change —
+    // including the empty-after-delete one — is persisted.
+    if (!hasSavedRef.current) {
+      hasSavedRef.current = true;
+      return;
+    }
     // QA5: debounce the save. Previously every state change
     // (favorite toggle, scene add, etc.) wrote the full
     // journal synchronously to localStorage, blocking the

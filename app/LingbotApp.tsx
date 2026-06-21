@@ -783,6 +783,15 @@ function DreamSurface() {
   const voice = useVoice();
   const sessions = useSessions();
   const [hasBegun, setHasBegun] = useState(false);
+  // QA19 fix: deferred retry timers see `hasBegun` at scheduling
+  // time, not at fire time. If the user hits Reset between the
+  // schedule and the fire, the retry resurrects the world they
+  // just tore down. Mirror hasBegun into a ref so deferred
+  // callbacks can read the current value.
+  const hasBegunRef = useRef(hasBegun);
+  useEffect(() => {
+    hasBegunRef.current = hasBegun;
+  }, [hasBegun]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [vrMode, setVrMode] = useState(false);
   const [pruneToast, setPruneToast] = useState<string | null>(null);
@@ -801,6 +810,19 @@ function DreamSurface() {
     setDirectorToast(msg);
     if (directorToastTimer.current) clearTimeout(directorToastTimer.current);
     directorToastTimer.current = setTimeout(() => setDirectorToast(null), 1200);
+  }, []);
+  // QA19 fix: the 1.2s directorToastTimer was never cleared on
+  // unmount. If the user hits Begin → Dream renders → resets to
+  // start screen (or React Strict Mode mounts/unmounts in dev),
+  // the deferred `setDirectorToast(null)` fires on a dead
+  // component and React logs the warning. Clear on unmount.
+  useEffect(() => {
+    return () => {
+      if (directorToastTimer.current) {
+        clearTimeout(directorToastTimer.current);
+        directorToastTimer.current = null;
+      }
+    };
   }, []);
   // QA4: ? opens the keyboard-shortcuts overlay. Dismissed
   // with Escape or by tapping outside. Available on every
@@ -1159,11 +1181,23 @@ function DreamSurface() {
     reconnectingRef.current = true;
     retryCountRef.current += 1;
     setAutoRetrying(true);
+    // QA19 fix: a retry means we're starting a fresh attempt.
+    // The stuck detector should NOT count the pre-retry
+    // disconnected time against the new attempt's 8s budget.
+    // Clear the clock so the next disconnected → connecting
+    // run starts from zero.
+    connectingSinceRef.current = null;
     // QA16: exponential backoff with jitter — 1.5s, 3s, then
     // bail. The cap above stops the third attempt.
     const delay = 1500 * 2 ** (retryCountRef.current - 1);
     const jitter = Math.floor(Math.random() * 250);
     const t = setTimeout(() => {
+      // QA19 fix: also bail if the user has reset in the interim
+      // — the previous code would have resurrected the world
+      // the user just tore down. Use a ref so the deferred
+      // callback sees the latest value rather than the
+      // value at scheduling time.
+      if (!hasBegunRef.current) return;
       // QA16 retry-clearing bug: without this, `reconnectingRef`
       // stays true forever after the retry fires, so a *second*
       // disconnect never schedules a second retry — the cap is
@@ -1175,21 +1209,13 @@ function DreamSurface() {
     }, delay + jitter);
     return () => {
       clearTimeout(t);
-      // If the effect is being torn down because we hit the cap
-      // (retryCountRef >= 2 blocked the next attempt), the
-      // setTimeout above never ran, so reconnectingRef is still
-      // true. Clear it so a future disconnect cycle starts
-      // fresh.
-      if (retryCountRef.current >= 2) {
-        reconnectingRef.current = false;
-      }
       // Don't clear `autoRetrying` here — the effect's cleanup
       // fires on every dependency change, including status flips,
       // which is exactly when we want the pill to stay visible.
       // We clear it only when the user reaches `ready` (above) or
       // a classified terminal error trips (above).
     };
-  }, [status, hasBegun, lastError, connect]);
+  }, [status, hasBegun, lastError?.message, connect]);
 
   // M9.11: "stuck" detection — if the SDK is taking longer than 8s
   // to either connect or surface an error, give the user an escape
@@ -1285,9 +1311,16 @@ function DreamSurface() {
   // no-op until the user taps the sound toggle (browser
   // autoplay policy: AudioContext can only be created
   // inside a user gesture).
+  //
+  // F4: while the mic is open, the ambient bed ducks to
+  // 25% so the user's voice is intelligible over the bed.
+  // The hook multiplies the patch gain by 0.25 with a
+  // 200ms ramp; STT latency covers the 200ms ramp
+  // cleanly.
   const ambient = useAmbient({
     enabled: hasBegun,
     paused: vrMode,
+    duckWhileListening: voice.listening,
   });
   useRemDrift({
     paused: remPaused,

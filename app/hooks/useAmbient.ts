@@ -22,6 +22,13 @@ export interface UseAmbientOptions {
   enabled: boolean;
   /** Pause the audio without tearing down (e.g. VR mode). */
   paused?: boolean;
+  /**
+   * When true, the master gain is multiplied by a small
+   * factor (0.25) so the user's voice is more intelligible
+   * over the ambient bed. Use while the mic is open.
+   * Ramped over ~200ms to avoid a click.
+   */
+  duckWhileListening?: boolean;
 }
 
 export interface UseAmbientApi {
@@ -31,12 +38,21 @@ export interface UseAmbientApi {
   isOn: boolean;
 }
 
-export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseAmbientApi {
+export function useAmbient({ enabled, paused = false, duckWhileListening = false }: UseAmbientOptions): UseAmbientApi {
   const [isOn, setIsOn] = useState(false);
   // Mirror of isOn so toggle() can read the freshest value
   // without depending on `isOn` (which would force the
   // toggle handler to re-bind every state flip).
   const isOnRef = useRef(false);
+  // DUCKED_GAIN multiplies the patch's gain when the user
+  // is voice-listening. 0.25 = quarter-volume; the ambient
+  // bed fades back in 200ms after the mic closes. Tracked
+  // in a ref so the master-loop interval (which runs
+  // every 250ms) and the ducking effect can both read the
+  // freshest value without re-binding each other.
+  const DUCKED_GAIN = 0.25;
+  const duckRef = useRef(false);
+  const duckWhileListeningRef = useRef(duckWhileListening);
   const ctxRef = useRef<AudioContext | null>(null);
   const masterRef = useRef<GainNode | null>(null);
   const filterRef = useRef<BiquadFilterNode | null>(null);
@@ -81,12 +97,16 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
       const want = pendingPatchRef.current;
       const have = currentPatchRef.current;
       if (want === have) return;
-      // Crossfade gain.
+      // Crossfade gain. Multiplied by the duck factor so a
+      // patch change during a voice-listening window does
+      // not blast back to full volume.
       const t = ctx.currentTime;
       const now = t;
+      const duckMul = duckRef.current ? DUCKED_GAIN : 1;
+      const target = want.gain * duckMul;
       master.gain.cancelScheduledValues(now);
       master.gain.setValueAtTime(master.gain.value, now);
-      master.gain.linearRampToValueAtTime(want.gain, now + 0.8);
+      master.gain.linearRampToValueAtTime(target, now + 0.8);
       // Reroute through a NEW filter? Too expensive. Instead
       // we crossfade TWO filter chains. Simpler: just update
       // the existing filter's parameters with a 800ms ramp.
@@ -113,7 +133,15 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
       // is generated once and we don't want to swap it
       // mid-stream.
       if (have.noiseColor !== want.noiseColor && noiseRef.current) {
+        // QA19 fix: the previous code only called `stop()`,
+        // which leaves the node connected to the filter. Web
+        // Audio holds the connection until explicitly
+        // disconnected, so the stopped node sits in the
+        // graph indefinitely and the audio thread iterates
+        // it on every block. Disconnect + stop so the node
+        // can be GC'd.
         try { noiseRef.current.stop(); } catch { /* noop */ }
+        try { noiseRef.current.disconnect(); } catch { /* noop */ }
         const next = makeNoiseSource(ctx, filter, want.noiseColor);
         next.start();
         noiseRef.current = next;
@@ -161,6 +189,39 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
       }
     };
   }, []);
+
+  // F4: voice-listening duck. When `duckWhileListening`
+  // flips true, ramp the master gain down to 25% of the
+  // current patch gain over 200ms. When it flips false,
+  // ramp back up. The 200ms ramp keeps the change
+  // inaudible — voice STT is still picking up the user
+  // 200ms after the mic opens, but the brain filters out
+  // a slow gain change as natural.
+  useEffect(() => {
+    duckWhileListeningRef.current = duckWhileListening;
+    if (!isOnRef.current) {
+      // Track the desired state even if ambient isn't on
+      // yet — the next `on()` reads duckRef and starts at
+      // the ducked gain instead of full.
+      duckRef.current = duckWhileListening;
+      return;
+    }
+    const ctx = ctxRef.current;
+    const master = masterRef.current;
+    if (!ctx || !master || ctx.state === "closed") {
+      duckRef.current = duckWhileListening;
+      return;
+    }
+    const wasDucked = duckRef.current;
+    if (wasDucked === duckWhileListening) return;
+    duckRef.current = duckWhileListening;
+    const t = ctx.currentTime;
+    const patchGain = pendingPatchRef.current.gain;
+    const target = duckWhileListening ? patchGain * DUCKED_GAIN : patchGain;
+    master.gain.cancelScheduledValues(t);
+    master.gain.setValueAtTime(master.gain.value, t);
+    master.gain.linearRampToValueAtTime(target, t + 0.2);
+  }, [duckWhileListening]);
 
   function ensureContext(): AudioContext | null {
     if (typeof window === "undefined") return null;
@@ -236,9 +297,14 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
     const master = masterRef.current;
     if (master) {
       const t = ctx.currentTime;
+      // Honor the duck factor at `on()` time — if the user
+      // toggles ambient on while the mic is already open,
+      // we should start at the ducked gain, not full.
+      const duckMul = duckRef.current ? DUCKED_GAIN : 1;
+      const target = pendingPatchRef.current.gain * duckMul;
       master.gain.cancelScheduledValues(t);
       master.gain.setValueAtTime(master.gain.value, t);
-      master.gain.linearRampToValueAtTime(pendingPatchRef.current.gain, t + 0.6);
+      master.gain.linearRampToValueAtTime(target, t + 0.6);
     }
     isOnRef.current = true;
     setIsOn(true);
