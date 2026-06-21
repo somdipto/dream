@@ -41,10 +41,10 @@ export function CommandError() {
   return (
     <div
       role="alert"
-      className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-950/40 p-3 text-red-200 backdrop-blur"
+      className="flex items-start gap-2 rounded-lg border border-white/20 bg-white/8 p-3 text-white backdrop-blur"
     >
       <div className="flex-1">
-        <span className="text-[10px] uppercase tracking-wider text-red-400">
+        <span className="text-[10px] uppercase tracking-wider text-white/55">
           {error.command} failed
         </span>
         <p className="mt-1 text-xs">{error.reason}</p>
@@ -56,7 +56,7 @@ export function CommandError() {
         }}
         aria-label="Dismiss error"
         data-testid="command-error-dismiss"
-        className="rounded p-1 text-red-300 hover:bg-red-500/20 hover:text-white"
+        className="rounded p-1 text-white/70 hover:bg-white/10 hover:text-white"
       >
         ×
       </button>

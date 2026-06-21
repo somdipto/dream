@@ -23,10 +23,10 @@ import { dreamBus } from "../lib/event-bus";
 // was bad" (green dot, normal duration) from "model is choking"
 // (green dot, stale red duration, possibly still climbing).
 const TONE: Record<string, { dot: string; label: string; ring: string }> = {
-  disconnected: { dot: "bg-zinc-500", label: "Disconnected", ring: "border-white/10" },
-  connecting: { dot: "bg-amber-400 animate-pulse", label: "Connecting…", ring: "border-amber-400/30" },
-  waiting: { dot: "bg-amber-400 animate-pulse", label: "Waiting for GPU…", ring: "border-amber-400/30" },
-  ready: { dot: "bg-emerald-400", label: "Connected", ring: "border-emerald-400/30" },
+  disconnected: { dot: "bg-white/40", label: "Disconnected", ring: "border-white/10" },
+  connecting: { dot: "bg-white animate-pulse", label: "Connecting…", ring: "border-white/30" },
+  waiting: { dot: "bg-white animate-pulse", label: "Waiting for GPU…", ring: "border-white/30" },
+  ready: { dot: "bg-white", label: "Connected", ring: "border-white/30" },
 };
 
 export function StatusBadge() {
@@ -50,7 +50,7 @@ export function StatusBadge() {
         <span className="text-xs font-medium text-white/90">{tone.label}</span>
         {lastPaint !== null && status === "ready" && (
           <span
-            className={`text-[10px] ${lastPaint.ok ? "text-white/55" : "text-red-300"}`}
+            className={`text-[10px] ${lastPaint.ok ? "text-white/55" : "text-white/70"}`}
             data-testid="last-paint-ms"
             title={
               lastPaint.ok
@@ -63,7 +63,7 @@ export function StatusBadge() {
         )}
       </div>
       {lastError && (
-        <p className="mt-1 max-w-[14rem] truncate text-[10px] text-red-300" title={lastError.message}>
+        <p className="mt-1 max-w-[14rem] truncate text-[10px] text-white/70" title={lastError.message}>
           {lastError.message}
         </p>
       )}

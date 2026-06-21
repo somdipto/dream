@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { LingbotMainVideoView, useLingbot } from "@reactor-models/lingbot";
 import { useVoice } from "../hooks/useVoice";
 
@@ -270,7 +270,7 @@ export function VRView({
       {!ready && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/80">
           <div className="max-w-sm px-6 text-center">
-            <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+            <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-white" />
             <p className="mt-4 text-sm text-white/80">
               {status === "connecting"
                 ? "Connecting…"

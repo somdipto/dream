@@ -656,7 +656,7 @@ export function DesktopDream() {
               ? "Walk with W A S D · look with the mouse"
               : "a sunlit alpine meadow at golden hour, wildflowers, distant snow-capped peaks")}
         </p>
-        {error && <p className="mt-1 text-xs text-red-300" role="status" aria-live="polite">{error}</p>}
+        {error && <p className="mt-1 text-xs text-white/70" role="status" aria-live="polite">{error}</p>}
       </div>
 
       {/* QA16/A11Y-1: visually-hidden live region for paint
@@ -692,7 +692,7 @@ export function DesktopDream() {
           dimmedReason="Conflicts with the selected style"
         />
         {conflictActive && (
-          <p className="text-[10px] text-amber-300/80">
+          <p className="text-[10px] text-white/60">
             Heads-up — this style + time combo gives the model conflicting
             cues. The time-of-day will be ignored.
           </p>
@@ -728,7 +728,7 @@ export function DesktopDream() {
           aria-label="Surprise me with a random dream"
           title="Surprise me"
           data-testid="desktop-surprise-btn"
-          className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-amber-300/30 bg-amber-400/15 text-base text-amber-100 transition hover:bg-amber-400/30"
+          className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-white/20 bg-white/10 text-base text-white transition hover:bg-white/20"
         >
           ✨
         </button>
@@ -745,7 +745,7 @@ export function DesktopDream() {
           className={[
             "grid h-12 w-12 shrink-0 place-items-center rounded-full border text-base transition",
             poseLocked
-              ? "border-amber-400/60 bg-amber-500/30 text-white"
+              ? "border-white bg-white/20 text-white"
               : "border-white/10 bg-white/10 text-white/85 hover:bg-white/20 disabled:opacity-40",
           ].join(" ")}
         >
@@ -772,7 +772,7 @@ export function DesktopDream() {
           className={[
             "grid h-12 w-12 shrink-0 place-items-center rounded-full border text-base transition",
             currentSceneIsFav
-              ? "border-rose-400/60 bg-rose-500/30 text-white"
+              ? "border-white bg-white/25 text-white"
               : "border-white/10 bg-white/10 text-white/85 hover:bg-white/20 disabled:opacity-40",
           ].join(" ")}
         >
@@ -861,7 +861,7 @@ export function DesktopDream() {
             className={[
               "grid h-12 w-12 shrink-0 place-items-center rounded-full border text-base transition-colors",
               voice.listening
-                ? "border-red-400/60 bg-red-500/30 text-white"
+                ? "border-white bg-white/20 text-white animate-pulse"
                 : "border-white/10 bg-white/10 text-white/80 hover:bg-white/20",
             ].join(" ")}
           >
@@ -882,6 +882,6 @@ export function DesktopDream() {
 
 function PhaseDot({ phase }: { phase: "idle" | "loading" | "live" }) {
   const color =
-    phase === "live" ? "bg-emerald-400" : phase === "loading" ? "bg-amber-400" : "bg-white/30";
+    phase === "live" ? "bg-white" : phase === "loading" ? "bg-white/60 animate-pulse" : "bg-white/30";
   return <span className={`inline-block h-1.5 w-1.5 rounded-full ${color}`} />;
 }

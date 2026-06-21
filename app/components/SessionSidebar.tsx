@@ -617,13 +617,13 @@ function SessionCard({
           aria-label="Delete session"
           title="Delete (undoable)"
           data-testid="session-delete-btn"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs text-white/60 hover:bg-red-500/30 hover:text-white"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs text-white/60 hover:bg-white/15 hover:text-white"
         >
           ×
         </button>
       </div>
       {isActive && (
-        <p className="-mt-2 px-3 pb-2 text-[10px] uppercase tracking-widest text-emerald-300" aria-label="Currently active session">
+        <p className="-mt-2 px-3 pb-2 text-[10px] uppercase tracking-widest text-white/70" aria-label="Currently active session">
           ● Active
         </p>
       )}
@@ -759,7 +759,7 @@ function SessionCard({
                   type="button"
                   onClick={() => onRemoveScene(scene.id)}
                   aria-label="Remove scene"
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs text-white/50 hover:bg-red-500/30 hover:text-white"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs text-white/50 hover:bg-white/15 hover:text-white"
                 >
                   ×
                 </button>
@@ -851,7 +851,7 @@ function ReadLastDreamButton() {
       className={[
         "grid h-9 w-9 place-items-center rounded-full border text-xs",
         reading
-          ? "border-emerald-300/50 bg-emerald-400/20 text-emerald-100"
+          ? "border-white bg-white/20 text-white"
           : "border-white/10 bg-white/5 text-white/55 hover:bg-white/10",
       ].join(" ")}
       title={reading ? "Stop narration" : "Read my last dream"}

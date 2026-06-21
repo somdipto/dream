@@ -165,7 +165,7 @@ function ByokKeyField({ onChanged }: { onChanged?: () => void }) {
     <div className="mt-4 w-full max-w-sm rounded-2xl border border-white/10 bg-white/5 p-3 text-left text-xs text-white/80">
       {savedFingerprint ? (
         <div className="flex items-center justify-between gap-2">
-          <span className="text-emerald-300">
+          <span className="text-white/80">
             Using your key <code className="font-mono">{savedFingerprint}</code>
           </span>
           <div className="flex gap-2">
@@ -180,7 +180,7 @@ function ByokKeyField({ onChanged }: { onChanged?: () => void }) {
               type="button"
               onClick={onClear}
               data-testid="byok-clear-btn"
-              className="rounded-full border border-red-400/30 px-2 py-1 text-[10px] text-red-200 hover:bg-red-500/15"
+              className="rounded-full border border-white/25 px-2 py-1 text-[10px] text-white/80 hover:bg-white/10"
             >
               Remove
             </button>
@@ -221,7 +221,7 @@ function ByokKeyField({ onChanged }: { onChanged?: () => void }) {
               Cancel
             </button>
           </div>
-          {error && <p className="text-[10px] text-red-300">{error}</p>}
+          {error && <p className="text-[10px] text-white/70">{error}</p>}
           <p className="text-[10px] text-white/40">
             Get one at{" "}
             <a
@@ -274,7 +274,7 @@ function BlackScreenMemoryChip() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         data-testid="black-screen-chip"
-        className="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-500/15 px-3 py-1.5 text-[11px] text-amber-100 backdrop-blur hover:bg-amber-500/25"
+        className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] text-white backdrop-blur hover:bg-white/20"
       >
         <span aria-hidden="true">●</span>
         <span>
@@ -315,7 +315,7 @@ function BlackScreenMemoryChip() {
                     className="rounded-md border border-white/5 bg-white/5 px-2 py-1.5"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-mono text-amber-200">
+                      <span className="font-mono text-white/70">
                         {e.source}
                       </span>
                       <span className="text-white/40">
@@ -491,7 +491,7 @@ function NewSessionConfirmModal({
             ref={confirmRef}
             type="button"
             onClick={onConfirm}
-            className="min-h-[40px] rounded-full border border-emerald-400/40 bg-emerald-500/30 px-4 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-500/40"
+            className="min-h-[40px] rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/15"
             data-testid="new-session-confirm-btn"
           >
             New session
@@ -580,8 +580,8 @@ function ConfirmDialog({
             onClick={onConfirm}
             className={
               destructive
-                ? "min-h-[40px] rounded-full border border-red-400/40 bg-red-500/30 px-4 py-2 text-sm font-medium text-red-100 hover:bg-red-500/40"
-                : "min-h-[40px] rounded-full border border-emerald-400/40 bg-emerald-500/30 px-4 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-500/40"
+                ? "min-h-[40px] rounded-full border border-white/30 bg-white/15 px-4 py-2 text-sm font-medium text-white hover:bg-white/25"
+                : "min-h-[40px] rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/15"
             }
           >
             {confirmLabel}
@@ -1346,7 +1346,7 @@ function DreamSurface() {
             aria-live="assertive"
             className="fixed inset-x-3 top-3 z-50 flex justify-center"
           >
-            <div className="flex max-w-md items-center gap-3 rounded-2xl border border-amber-400/40 bg-amber-500/15 px-4 py-3 text-xs text-amber-100 shadow-2xl backdrop-blur">
+            <div className="flex max-w-md items-center gap-3 rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-xs text-white shadow-2xl backdrop-blur">
               <span className="flex-1">
                 We couldn't read your saved journal. The last snapshot was
                 preserved — tap Restore to bring it back.
@@ -1354,7 +1354,7 @@ function DreamSurface() {
               <button
                 type="button"
                 onClick={() => setRecoveryDiscardConfirm(true)}
-                className="rounded-full border border-amber-400/30 px-3 py-1 text-amber-100 hover:bg-amber-500/20"
+                className="rounded-full border border-white/20 px-3 py-1 text-white hover:bg-white/15"
                 data-testid="recovery-discard-btn"
               >
                 Discard
@@ -1423,7 +1423,7 @@ function DreamSurface() {
             </div>
           )}
           {sessions.sessions.length > 0 && (
-            <p className="mt-2 text-xs text-emerald-300">
+            <p className="mt-2 text-xs text-white/60">
               {sessions.sessions.length} saved dream{sessions.sessions.length === 1 ? "" : "s"} on this device.
             </p>
           )}
@@ -1531,7 +1531,7 @@ function DreamSurface() {
               className={[
                 "grid h-10 w-10 place-items-center rounded-full border text-xs backdrop-blur transition-colors",
                 ambient.isOn
-                  ? "border-emerald-300/40 bg-emerald-400/20 text-emerald-100 hover:bg-emerald-400/30"
+                  ? "border-white bg-white/20 text-white hover:bg-white/25"
                   : "border-white/10 bg-black/40 text-white/80 hover:bg-black/60",
               ].join(" ")}
             >
@@ -1612,7 +1612,7 @@ function DreamSurface() {
             }}
             aria-label="Start a new session"
             data-testid="new-session-btn"
-            className="min-h-[40px] rounded-full border border-emerald-400/40 bg-emerald-500/20 px-3 py-1.5 text-xs font-medium text-emerald-100 backdrop-blur hover:bg-emerald-500/30"
+            className="min-h-[40px] rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white backdrop-blur hover:bg-white/20"
           >
             {platform.isMobile ? "+ New session" : "+ New session"}
           </button>
@@ -1725,7 +1725,7 @@ function DreamSurface() {
             />
           ) : (
             <div className="relative max-w-sm text-center">
-              <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+              <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-white" />
               <p className="mt-4 text-sm text-white/85">
                 {status === "disconnected"
                   ? lastError
@@ -1747,9 +1747,9 @@ function DreamSurface() {
                   role="status"
                   aria-live="polite"
                   data-testid="auto-retry-pill"
-                  className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-[11px] text-amber-200"
+                  className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[11px] text-white/80"
                 >
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-300" />
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
                   Retrying in a moment…
                 </div>
               )}
@@ -1893,7 +1893,7 @@ function DreamSurface() {
 
       {/* Prune toast */}
       {pruneToast && (
-        <div className="pointer-events-none fixed left-1/2 top-20 z-50 -translate-x-1/2 rounded-full border border-amber-400/40 bg-amber-500/20 px-4 py-1.5 text-xs text-amber-100 shadow-lg backdrop-blur">
+        <div className="pointer-events-none fixed left-1/2 top-20 z-50 -translate-x-1/2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-xs text-white shadow-lg backdrop-blur">
           {pruneToast}
         </div>
       )}
@@ -2085,13 +2085,13 @@ function RestoreButton({
           }
         });
       }}
-      className="flex items-center justify-center gap-2 rounded-full bg-amber-300 px-3 py-1 font-medium text-amber-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+      className="flex items-center justify-center gap-2 rounded-full bg-white px-3 py-1 font-medium text-black hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-60"
       data-testid="recovery-restore-btn"
     >
       {restoring && (
         <span
           aria-hidden="true"
-          className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-amber-950/30 border-t-amber-950"
+          className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-black/20 border-t-black"
         />
       )}
       {restoring ? "Restoring…" : "Restore"}
@@ -2276,7 +2276,7 @@ function ReactorErrorScreen({
             </button>
           </div>
           {byokError && (
-            <p className="text-[10px] text-red-300">{byokError}</p>
+            <p className="text-[10px] text-white/70">{byokError}</p>
           )}
         </form>
       )}

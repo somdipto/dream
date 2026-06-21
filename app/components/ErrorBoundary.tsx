@@ -57,7 +57,7 @@ export class ErrorBoundary extends Component<Props, State> {
         <p className="max-w-md text-sm text-white/70">
           The dream engine hit an unexpected error. Your saved sessions are safe — try again.
         </p>
-        <pre className="max-h-40 max-w-2xl overflow-auto rounded-lg border border-white/10 bg-black/60 p-3 text-left text-[10px] text-red-200">
+        <pre className="max-h-40 max-w-2xl overflow-auto rounded-lg border border-white/15 bg-black/60 p-3 text-left text-[10px] text-white/80">
           {error.message}
           {error.stack ? "\n\n" + error.stack.split("\n").slice(0, 5).join("\n") : ""}
         </pre>

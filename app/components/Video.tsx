@@ -297,21 +297,25 @@ export function Video() {
     // never paints, the user sees a friendly daylight surface, not
     // a black hole. The aurora gradient still tints it on top.
     <div className="relative h-full w-full overflow-hidden bg-[#fef3e8]">
-      {/* Aurora background — ALWAYS present (opacity-controlled),
+      {/* Black placeholder — ALWAYS present (opacity-controlled),
           not toggled in/out. The video stage sits on top. LingBot's
-          first chunks can be near-black, so we keep the aurora
+          first chunks can be near-black, so we keep the placeholder
           peeking through at low opacity even after grace expires —
           a hard black screen reads as "broken app" and is exactly
-          what the user reported. */}
+          what the user reported. The previous multi-color aurora
+          gradient (indigo/pink/cyan/purple) was removed for the
+          black theme; the placeholder is now a single near-black
+          layer so the world fades cleanly into the surrounding
+          #09090b body background. */}
       <div
-        className="pointer-events-none absolute inset-0 transition-opacity duration-700 ease-out"
+        className="pointer-events-none absolute inset-0 bg-black transition-opacity duration-700 ease-out"
         aria-hidden="true"
         data-testid="video-aurora"
         style={{ opacity: auroraOpacity }}
-      >
-        <div className="absolute inset-0 animate-[aurora-shift_18s_ease-in-out_infinite] bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.55),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(236,72,153,0.45),transparent_55%),radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.40),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(168,85,247,0.40),transparent_55%)] bg-[length:200%_200%]" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(255,255,255,0.10),transparent_60%)]" />
-      </div>
+      />
+      {/* The aurora-shift keyframe in globals.css is now unused but
+          kept for one release to avoid breaking any future revert
+          (CSS @keyframes don't fail builds when unused). */}
 
       {/* The video itself fades in over 600ms once we have a real
           frame — LingBot's first frames are sometimes near-black,
@@ -348,7 +352,7 @@ export function Video() {
         ].join(" ")}
         style={{
           background:
-            "radial-gradient(ellipse at center, rgba(255,243,232,0.65) 0%, rgba(255,243,232,0.0) 60%)",
+            "radial-gradient(ellipse at center, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.0) 60%)",
         }}
       />
 
@@ -360,7 +364,7 @@ export function Video() {
           <div className="max-w-sm px-6 text-center">
             {phase === "loading" && (
               <>
-                <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-white" />
                 <p className="mt-4 text-sm text-white/85">
                   {status === "connecting"
                     ? "Connecting to Reactor…"
@@ -375,7 +379,7 @@ export function Video() {
             )}
             {phase === "ready" && (
               <>
-                <p className="text-xs uppercase tracking-widest text-emerald-300/90">
+                <p className="text-xs uppercase tracking-widest text-white/70">
                   World connected
                 </p>
                 <p className="mt-2 text-sm text-white/85">
@@ -385,7 +389,7 @@ export function Video() {
             )}
             {phase === "generating" && (
               <>
-                <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+                <div className="mx-auto h-2 w-2 animate-pulse rounded-full bg-white" />
                 <p className="mt-4 text-sm text-white/85">
                   Painting your dream…
                 </p>
