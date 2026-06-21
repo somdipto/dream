@@ -7,3 +7,4 @@ node_modules
 *.tsbuildinfo
 .vercel
 tests/.build/
+tests/.build-*/
