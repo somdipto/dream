@@ -80,7 +80,7 @@ async function main() {
 //       the unchanged side ──────────────────────────────
 {
   setDirectorState({ styleId: "noir", variantId: "rain" });
-  let last: { styleId: string | null; variantId: string | null } | null = null;
+  let last: { styleId: string | null; variantId: string | null } | null = null as { styleId: string | null; variantId: string | null } | null;
   const off = dreamBus.on(
     "dream:directorChange",
     (d: { styleId: string | null; variantId: string | null }) => {

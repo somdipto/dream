@@ -370,6 +370,21 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
                     onSelectScene?.(s.id, sceneId);
                   }}
                   onToggleFavorite={(sceneId) => store.toggleFavorite(sceneId, s.id)}
+                  onFork={(sceneId) => {
+                    // QA13/F11: fork at this scene, then
+                    // jump to the fork's last scene. The
+                    // fork becomes the new active session
+                    // (forkSession sets it), and we close
+                    // the sidebar so the user can see the
+                    // new world paint.
+                    const newId = store.forkSession({ sessionId: s.id, atSceneId: sceneId });
+                    if (newId) {
+                      const forked = store.sessions.find((x) => x.id === newId);
+                      const last = forked?.scenes[forked.scenes.length - 1];
+                      if (last) onSelectScene?.(newId, last.id);
+                      onClose();
+                    }
+                  }}
                 />
                 ))}
               </>
@@ -506,6 +521,7 @@ function SessionCard({
   onRemoveScene,
   onSelectScene,
   onToggleFavorite,
+  onFork,
 }: {
   session: Session;
   isActive: boolean;
@@ -517,6 +533,7 @@ function SessionCard({
   onRemoveScene: (sceneId: string) => void;
   onSelectScene: (sceneId: string) => void;
   onToggleFavorite: (sceneId: string) => void;
+  onFork: (sceneId: string) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState(session.title);
@@ -676,6 +693,26 @@ function SessionCard({
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
                 >
                   ➡
+                </button>
+                {/* QA13/F11: Scene Fork. Creates an
+                    independent copy of the session up to
+                    and including this scene. The original
+                    is untouched, so the user can experiment
+                    with the fork (delete scenes, try
+                    different continuing prompts) without
+                    polluting the source timeline. */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onFork(scene.id);
+                  }}
+                  aria-label={`Fork "${scene.prompt}" into a new session`}
+                  title="Fork from here"
+                  data-testid="scene-fork"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
+                >
+                  ⑂
                 </button>
                 {/* QA5/F4: download-as-PNG. Fetches the
                     scene's `image_url` (the model's source

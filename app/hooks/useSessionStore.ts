@@ -26,6 +26,16 @@ export interface UseSessionStore {
   deleteSession: (sessionId: string) => void;
   restoreSession: (session: Session) => void;
   renameSession: (sessionId: string, title: string) => void;
+  /**
+   * QA13/F11: fork an existing session at a given scene
+   * id (or at the end if not specified). The new
+   * session owns an independent copy of every scene up
+   * to and including the fork point, with "(fork)"
+   * appended to the title. The original is left
+   * untouched. Returns the new session id, or null if
+   * the source session/scene wasn't found.
+   */
+  forkSession: (opts: { sessionId: string; atSceneId?: string }) => string | null;
   setActive: (sessionId: string | null) => void;
   /** QA3: toggle the favorite flag on a scene. */
   toggleFavorite: (sceneId: string, sessionId?: string) => void;
@@ -219,6 +229,58 @@ export function useSessionStoreImpl(): UseSessionStore {
     [],
   );
 
+  // QA13/F11: fork a session at a scene id. Copies
+  // every scene up to and including the fork point
+  // into a brand-new session. The original session is
+  // left intact, so the user can experiment without
+  // polluting the source.
+  //
+  // We use `sessionsRef` (not the closure-captured
+  // `sessions`) so a rapid double-fork always sees the
+  // latest session list — the previous version of
+  // similar code lagged by one render and forked the
+  // wrong snapshot.
+  const forkSession = useCallback(
+    (opts: { sessionId: string; atSceneId?: string }): string | null => {
+      const source = sessionsRef.current.find((s) => s.id === opts.sessionId);
+      if (!source) return null;
+      // Find the fork point — the scene index up to
+      // which we copy. If no atSceneId is given, fork
+      // at the end (the most recent scene).
+      let forkIndex = source.scenes.length - 1;
+      if (opts.atSceneId) {
+        const idx = source.scenes.findIndex((sc) => sc.id === opts.atSceneId);
+        if (idx < 0) return null;
+        forkIndex = idx;
+      }
+      if (forkIndex < 0) return null;
+      // Deep-copy the scenes up to the fork point. New
+      // ids so the fork can be edited independently of
+      // the source — toggling favorite on a forked
+      // scene won't flip the source scene.
+      const copiedScenes: Scene[] = source.scenes.slice(0, forkIndex + 1).map((s) => ({
+        ...s,
+        id: newSceneId(),
+        // favorite is intentionally NOT copied — a
+        // fork is a fresh exploration, not a copy of
+        // the user's marks.
+        favorite: false,
+      }));
+      const id = newSessionId();
+      const fork: Session = {
+        id,
+        title: `${source.title} (fork)`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        scenes: copiedScenes,
+      };
+      setSessions((prev) => [fork, ...prev]);
+      setActiveId(id);
+      return id;
+    },
+    [],
+  );
+
   const loadSession = useCallback((sessionId: string): Scene | null => {
     // Read from sessionsRef so consecutive calls within the same
     // render see the latest list. (The previous closure-captured
@@ -375,6 +437,7 @@ export function useSessionStoreImpl(): UseSessionStore {
       deleteSession,
       restoreSession,
       renameSession,
+      forkSession,
       setActive,
       toggleFavorite,
       recentPrompts,
@@ -398,6 +461,7 @@ export function useSessionStoreImpl(): UseSessionStore {
       deleteSession,
       restoreSession,
       renameSession,
+      forkSession,
       setActive,
       toggleFavorite,
       recentPrompts,
