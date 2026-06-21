@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { LingbotProvider, useLingbot, useLingbotImageAccepted } from "@reactor-models/lingbot";
 import { Video } from "./components/Video";
 import { DirectorOverlay } from "./components/DirectorOverlay";
+import { FlickToast } from "./components/FlickToast";
 import { PromptTrail } from "./components/PromptTrail";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { StatusBadge } from "./components/StatusBadge";
@@ -1905,6 +1906,11 @@ function DreamSurface() {
           />
         </>
       ) : null}
+
+      {/* QA21: Flick toast — visual feedback when a physical gesture
+          (spin, dive, lift, roll) paints the world. Shows for 1.2s after
+          each flick:prompt event. */}
+      <FlickToast />
 
       {/* Prune toast */}
       {pruneToast && (

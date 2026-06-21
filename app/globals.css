@@ -141,3 +141,12 @@ html.cursor-hidden textarea {
   70%  { opacity: 1; transform: translateY(0); }
   100% { opacity: 0; transform: translateY(0); }
 }
+
+/* QA21: Flick-toast feedback. Confirms a physical gesture (spin,
+   dive, lift, roll) was registered and the world is reacting. */
+@keyframes fade-in-up {
+  0%   { opacity: 0; transform: translate(-50%, 8px); }
+  20%  { opacity: 1; transform: translate(-50%, 0); }
+  80%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, -4px); }
+}
