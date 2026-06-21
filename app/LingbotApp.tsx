@@ -38,6 +38,7 @@ import {
 import { classifyReactorError } from "./lib/reactor-errors";
 import { bustNextToken, consumeBust } from "./lib/token-bust";
 import { loadUserKey, getFingerprint, saveUserKey as _saveUserKey, clearUserKey as _clearUserKey } from "./lib/byok";
+import { consumeSawCreditsDepleted, markSawCreditsDepleted, peekSawCreditsDepleted, probeEnvPool, readCachedEnvProbe } from "./lib/byok-prompt";
 
 async function fetchToken(): Promise<string> {
   // M9.8: respect the one-shot bust flag so the Lingbot SDK doesn't
@@ -109,8 +110,8 @@ export function LingbotApp() {
 // header on every token request. The server tries the user key first
 // and falls back to the env pool if it 402s.
 // ---------------------------------------------------------------------------
-function ByokKeyField({ onChanged }: { onChanged?: () => void }) {
-  const [open, setOpen] = useState(false);
+function ByokKeyField({ onChanged, initialOpen = false }: { onChanged?: () => void; initialOpen?: boolean }) {
+  const [open, setOpen] = useState(initialOpen);
   const [draft, setDraft] = useState("");
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -240,6 +241,80 @@ function ByokKeyField({ onChanged }: { onChanged?: () => void }) {
           </p>
         </form>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BeginByokGate — wraps <ByokKeyField /> on the Begin overlay and
+// decides whether the paste field should auto-open.
+//
+//   - If the user previously hit a credits_depleted error on this
+//     device, the field opens with the paste input focused. (The
+//     error screen calls markSawCreditsDepleted(); we consume the
+//     flag here so a single paste cycle clears it.)
+//   - If a fresh probe finds the env pool empty, the field opens
+//     too — no env key means there's literally no other way to
+//     start a session.
+//   - Otherwise the field stays collapsed behind a clear
+//     "Use my own Reactor key" button.
+//
+// The probe is fire-and-forget on the first mount; the cached
+// result is shown immediately so the overlay never flickers.
+// ---------------------------------------------------------------------------
+function BeginByokGate() {
+  const [initialOpen, setInitialOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return consumeSawCreditsDepleted();
+  });
+  const [envState, setEnvState] = useState<"ok" | "empty" | "unknown">(() => {
+    if (typeof window === "undefined") return "unknown";
+    if (loadUserKey()) return "ok";
+    return readCachedEnvProbe();
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // If the user already has a saved BYOK key, the env pool is
+    // irrelevant to them — skip the probe.
+    if (loadUserKey()) {
+      setEnvState("ok");
+      return;
+    }
+    let cancelled = false;
+    void probeEnvPool().then((r) => {
+      if (cancelled) return;
+      setEnvState(r);
+      // Empty env pool + no saved user key = no way to start
+      // a session. Force the paste field open so the user
+      // doesn't have to find the BYOK link.
+      if (r === "empty" && !loadUserKey()) {
+        setInitialOpen(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return (
+    <div className="mt-2 flex flex-col items-center gap-2">
+      {envState === "empty" && !loadUserKey() && (
+        <p
+          className="max-w-xs text-[10px] text-white/55"
+          data-testid="begin-byok-empty-hint"
+        >
+          No server key is configured. Paste your own Reactor key below to start.
+        </p>
+      )}
+      <ByokKeyField
+        initialOpen={initialOpen}
+        onChanged={() => {
+          // A new saved key is a positive signal: re-probe on
+          // next mount, and lift the "empty" hint.
+          if (loadUserKey()) {
+            setEnvState("ok");
+          }
+        }}
+      />
     </div>
   );
 }
@@ -1500,7 +1575,7 @@ function DreamSurface() {
               the basic flow. Skipping on subsequent visits
               keeps the Begin overlay clean for repeat users. */}
           <FirstRunHint />
-          <ByokKeyField />
+          <BeginByokGate />
           <BlackScreenMemoryChip />
           <p className="mt-6 text-[10px] uppercase tracking-wider text-white/40">
             Powered by Reactor · LingBot
@@ -1717,6 +1792,14 @@ function DreamSurface() {
       status === "disconnected" && lastError
         ? classifyReactorError(lastError.message)
         : null;
+    // Persist a flag the moment the user hits a real credits_depleted
+    // error so the next Begin-overlay render auto-opens the BYOK
+    // paste field instead of making the user hunt for a tiny link.
+    // The flag is consumed (cleared) on the Begin overlay so a
+    // single paste cycle resets it.
+    if (classified?.reason === "credits_depleted") {
+      markSawCreditsDepleted();
+    }
     const isKnownError = classified && classified.reason !== "unknown";
     // Pure black theme: no aurora, no gradient, no warm tint.
     // The pre-paint journey is a flat black surface with the
