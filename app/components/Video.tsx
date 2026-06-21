@@ -130,6 +130,21 @@ export function Video() {
   // the average luma is below 18/255 (very dark), flag `darkFrames`
   // and let the aurora peek through. The sample cost is trivial —
   // 4 pixels, no ImageData allocation per pixel.
+  //
+  // QA16 (#178/#191): a `mountedRef` guards setState-after-unmount.
+  // In React 18 StrictMode the effect mounts → unmounts → remounts
+  // synchronously on the initial commit, and a tick that landed
+  // between can fire setDarkFrames after the cleanup. (React 18
+  // makes that a no-op rather than a warning, but the second
+  // mount sees stale state and the watchdog flips back to "fine"
+  // even though the video is still dark.)
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   useEffect(() => {
     if (phase !== "playing") {
       if (darkWatchdogRef.current) {
@@ -152,6 +167,12 @@ export function Video() {
     // respect the previous dark-frame state.
     let canvasTainted = false;
     function sampleDark() {
+      // QA16 (#178/#191): bail before any setState if the
+      // watchdog's host component has unmounted. Otherwise a
+      // 2s tick that fired after the cleanup in React 18
+      // StrictMode's mount→unmount→remount cycle would setState
+      // on an unmounted fiber.
+      if (!mountedRef.current) return;
       const v = document.querySelector('[data-testid="video-stage"] video');
       if (!(v instanceof HTMLVideoElement)) return;
       if (v.videoWidth === 0 || v.videoHeight === 0) {

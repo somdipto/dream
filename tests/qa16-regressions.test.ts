@@ -216,3 +216,19 @@ test("composeScenePrompt: body never carries control characters", () => {
   );
   assert.ok(prompt.includes("a dragon at dusk"));
 });
+
+// QA16/F-product: Flick-to-Paint prompt mapping
+// Every kind must produce a non-empty prompt and never throw.
+import { flickToPrompt, type FlickKind } from "../app/hooks/useMotionFlicks";
+const KINDS: FlickKind[] = ["spin", "dive", "lift", "roll"];
+test("flickToPrompt: returns a non-empty prompt for every kind", () => {
+  for (const k of KINDS) {
+    const p = flickToPrompt(k);
+    assert.ok(typeof p === "string" && p.length > 0, `${k} -> ${p}`);
+  }
+});
+test("flickToPrompt: same kind -> same string (deterministic)", () => {
+  for (const k of KINDS) {
+    assert.equal(flickToPrompt(k), flickToPrompt(k));
+  }
+});

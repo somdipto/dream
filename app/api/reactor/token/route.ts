@@ -449,8 +449,14 @@ export async function GET(req: Request) {
         { jwt: r.jwt, expires_at: r.expires_at },
         {
           headers: {
+            // QA16 (#182): the token is per-user when X-Reactor-User-Key
+            // is present. Without Vary on that header, a shared CDN
+            // cache could serve user A's JWT to user B on the next
+            // request (different key, same URL). Vary on Cookie +
+            // Authorization is necessary too because the cookie path
+            // also produces a per-user response.
             "Cache-Control": `private, max-age=${maxAge}`,
-            Vary: "Cookie, Authorization",
+            Vary: "Cookie, Authorization, X-Reactor-User-Key",
           },
         },
       );

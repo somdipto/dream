@@ -185,7 +185,12 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
     // even after another addScene/removeScene has reshuffled the list.
     setPendingDelete((curr) => {
       if (curr) clearTimeout(curr.timeoutId);
+      // QA16: also clear the unmount-cleanup mirror so an
+      // unmount during the 4.5s undo window doesn't leave a
+      // dangling timeout that fires after the sidebar is gone.
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
       const timeoutId = setTimeout(() => setPendingDelete(null), 4500);
+      undoTimerRef.current = timeoutId;
       return { session, timeoutId };
     });
     store.deleteSession(session.id);
@@ -194,6 +199,7 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
   function undoDelete() {
     if (!pendingDelete) return;
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = null;
     store.restoreSession(pendingDelete.session);
     setPendingDelete(null);
   }

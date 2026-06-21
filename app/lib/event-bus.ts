@@ -47,6 +47,11 @@ export interface DreamBusEvents {
    *  style or time/weather variant changes. The Director
    *  overlay listens and applies the matching CSS filter. */
   "dream:directorChange": { styleId: string | null; variantId: string | null };
+  /** QA16/F-product: emitted by MobileFlickPaint when a sharp
+   *  device tilt/flick is detected. Carried through the same
+   *  paint pipeline as a chip tap or voice final, so the user
+   *  can express a world-change with a physical gesture. */
+  "flick:prompt": { prompt: string; kind: "spin" | "dive" | "lift" | "roll" };
 }
 
 type EventName = keyof DreamBusEvents;

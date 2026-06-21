@@ -442,7 +442,12 @@ export function VoiceDream() {
   useEffect(() => {
     if (!ready) return;
     return voice.onFinal(onFinalCb);
-  }, [ready, voice, onFinalCb]);
+    // QA16: depend on the stable `voice.onFinal` callback,
+    // not the `voice` object (which is a fresh literal on
+    // every render of useVoice). Otherwise every re-render
+    // detaches and re-attaches the listener, and any final
+    // event between is dropped on the floor.
+  }, [ready, voice.onFinal, onFinalCb]);
 
   // If the user mutes while listening, stop the recogniser.
   useEffect(() => {
@@ -467,8 +472,14 @@ export function VoiceDream() {
   // missing the listener entirely so curated taps silently no-op'd.
   // Now subscribes to the typed event bus instead of window so a
   // browser extension cannot inject prompts.
+  //
+  // QA16/F-product: also listen for `flick:prompt` from
+  // MobileFlickPaint. Each physical gesture (spin / dive / lift /
+  // roll) emits a paint prompt that flows through the same
+  // pipeline as a chip tap, so the world reacts to a sharp
+  // phone-tilt exactly the way it reacts to a spoken sentence.
   useEffect(() => {
-    return dreamBus.on("dream:loadScene", (detail) => {
+    const offLoad = dreamBus.on("dream:loadScene", (detail) => {
       if (!detail?.prompt) return;
       // The abort event was already emitted by the sidebar before
       // this event arrived. Clear the flag so the *new* paint is
@@ -480,6 +491,24 @@ export function VoiceDream() {
       sessions.addScene({ prompt: detail.prompt, seed: detail.seed });
       void paintDreamRef.current(detail.prompt, { seed: detail.seed });
     });
+    const offFlick = dreamBus.on("flick:prompt", (detail) => {
+      if (!detail?.prompt) return;
+      // Flick = "physical prompt". Same shape as a chip tap.
+      abortedRef.current = false;
+      setLastPrompt(detail.prompt);
+      // Flick doesn't carry a seed — use Date.now() so the model
+      // gets a unique world-state and the new scene shows up
+      // fresh in the sidebar.
+      const seed = Date.now();
+      setLastSeed(seed);
+      setText(detail.prompt);
+      sessions.addScene({ prompt: detail.prompt, seed });
+      void paintDreamRef.current(detail.prompt, { seed });
+    });
+    return () => {
+      offLoad();
+      offFlick();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

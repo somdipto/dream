@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LingbotProvider, useLingbot } from "@reactor-models/lingbot";
+import { LingbotProvider, useLingbot, useLingbotImageAccepted } from "@reactor-models/lingbot";
 import { Video } from "./components/Video";
 import { DirectorOverlay } from "./components/DirectorOverlay";
 import { PromptTrail } from "./components/PromptTrail";
@@ -10,6 +10,7 @@ import { StatusBadge } from "./components/StatusBadge";
 import { CommandError } from "./components/CommandError";
 import { VoiceDream } from "./components/VoiceDream";
 import { GyroController } from "./components/GyroController";
+import { MobileFlickPaint } from "./components/MobileFlickPaint";
 import { cycleStyle, cycleVariant, resetDirector, setDirectorState, getDirectorState } from "./lib/director-state";
 import { timeBandForNow, variantIdForBand, labelForBand } from "./lib/time-of-day";
 import { DesktopController } from "./components/DesktopController";
@@ -782,6 +783,13 @@ function DreamSurface() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [vrMode, setVrMode] = useState(false);
   const [pruneToast, setPruneToast] = useState<string | null>(null);
+  // QA16: tracks the largest pruneNotice value we've already
+  // toasted for. The previous code only watched the boolean
+  // `pruneToast` to dedupe — meaning if a user was over quota
+  // and pruneNotice went 1 → 2 → 3 in the same 4s window,
+  // only the first increment ever produced a toast. The
+  // user thought "1 session lost" when 3 actually were.
+  const lastPruneSeenRef = useRef(0);
   // QA12/F10: Director keyboard shortcut toast. Shows
   // "Director: noir" for 1.2s after D/N/0.
   const [directorToast, setDirectorToast] = useState<string | null>(null);
@@ -812,27 +820,25 @@ function DreamSurface() {
   const [recoveryDiscardConfirm, setRecoveryDiscardConfirm] = useState(false);
 
   // Show a non-blocking toast when localStorage is full and we prune.
-  // Deduped: ignore further increments while a toast is already
-  // showing, so a permanently-over-quota user doesn't get a fresh
-  // toast every save. (Audit bug #22.)
+  // Deduped by *count*, not by *visible state*: the previous boolean
+  // dedupe silently swallowed every prune that happened while a
+  // toast was already on screen, so a chronically-over-quota user
+  // thought "1 lost" when 5 actually were. (Audit bug #22, fixed
+  // in QA16 to track the highest seen pruneNotice via ref.)
   useEffect(() => {
-    // QA5: snapshot the pruneNotice at the moment the toast
-    // appears so the user sees "pruned N sessions" rather
-    // than a single deduped message. The previous behavior
-    // hid subsequent prunes behind a single "oldest
-    // sessions" toast — users had no idea their second or
-    // third prune happened.
-    if (sessions.pruneNotice > 0 && !pruneToast) {
-      const n = sessions.pruneNotice;
-      setPruneToast(
-        n === 1
-          ? "Storage full — pruned oldest saved session."
-          : `Storage full — pruned ${n} oldest saved sessions.`,
-      );
-      const t = setTimeout(() => setPruneToast(null), 4000);
-      return () => clearTimeout(t);
-    }
-  }, [sessions.pruneNotice, pruneToast]);
+    const seen = lastPruneSeenRef.current;
+    const incoming = sessions.pruneNotice;
+    if (incoming <= seen) return;
+    lastPruneSeenRef.current = incoming;
+    const n = incoming - seen;
+    setPruneToast(
+      n === 1
+        ? "Storage full — pruned oldest saved session."
+        : `Storage full — pruned ${n} oldest saved session${n === 1 ? "" : "s"}.`,
+    );
+    const t = setTimeout(() => setPruneToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [sessions.pruneNotice]);
 
   // QA4: ? opens the shortcuts overlay. Also Escape closes it
   // when it's the only open modal. We keep this listener at
@@ -1218,7 +1224,12 @@ function DreamSurface() {
     const t = setTimeout(() => {
       // Only trip if the ref is still pointing at the same
       // start instant (i.e. we haven't been cleared by a
-      // terminal outcome in the meantime).
+      // terminal outcome in the meantime). The effect's
+      // cleanup also clears this timer when hasBegun flips
+      // to false or status becomes "ready", so the
+      // setStuck(true) below is only reachable while
+      // we're still genuinely stuck in a connecting-like
+      // state — never after the user has already left.
       if (connectingSinceRef.current === start) {
         setStuck(true);
       }
@@ -1814,7 +1825,18 @@ function DreamSurface() {
 
       {/* Headless controllers — run while connected. */}
       {platform.isMobile && !vrMode ? (
-        <GyroController enabled={status === "ready"} voiceListening={voice.listening} />
+        <>
+          <GyroController enabled={status === "ready"} voiceListening={voice.listening} />
+          {/* QA16/F-product: MobileFlickPaint detects sharp physical
+              gestures (spin, dive, lift, roll) and routes them through
+              the same paint pipeline as voice / chip taps. The user
+              asked for gyro + voice fusion; this is the missing
+              "physical gesture expresses intent" piece. */}
+          <MobileFlickPaint
+            enabled={status === "ready"}
+            voiceListening={voice.listening}
+          />
+        </>
       ) : !platform.isMobile ? (
         <>
           <DesktopController enabled={status === "ready"} />
@@ -1904,6 +1926,21 @@ function DesktopDefaultScene({
   const { setImage, setPrompt, start, uploadFile } = useLingbot();
   const sessions = useSessions();
   const ran = useRef(false);
+  // QA16: real signal for "image is ready", not a fake 100ms wait.
+  // The previous code used `await new Promise(r => setTimeout(r, 100))`
+  // — which both races the SDK (sometimes <100ms, sometimes 300ms)
+  // AND pretends success if the SDK silently drops the message.
+  // useLingbotImageAccepted subscribes a handler that fires the
+  // first time the server acks our setImage. We hold a single-
+  // shot resolver in a ref and clear it after firing.
+  const imageAcceptedResolverRef = useRef<(() => void) | null>(null);
+  useLingbotImageAccepted(() => {
+    const r = imageAcceptedResolverRef.current;
+    if (r) {
+      imageAcceptedResolverRef.current = null;
+      r();
+    }
+  });
 
   useEffect(() => {
     if (!enabled) return;
@@ -1937,10 +1974,18 @@ function DesktopDefaultScene({
           return;
         }
         await setImage({ image: ref });
-        // Wait for image_accepted up to 6s. If it never arrives,
-        // skip the start to avoid Reactor's "No image set" error.
-        // Wait for the imageReady callback the store wires up.
-        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        // Real wait: race the SDK's `image_accepted` message against
+        // a 6s timeout. If the SDK never acks, we still proceed —
+        // start() will surface "No image set" in the error pill,
+        // which is preferable to an unbounded hang.
+        const imageAccepted = new Promise<void>((resolve) => {
+          imageAcceptedResolverRef.current = resolve;
+        });
+        const acceptedTimeout = new Promise<void>((resolve) =>
+          setTimeout(resolve, 6000),
+        );
+        await Promise.race([imageAccepted, acceptedTimeout]);
+        imageAcceptedResolverRef.current = null;
         await setPrompt({ prompt: composeScenePrompt({ text: prompt, isFirst: true }) });
         await start();
         // Save the default as the first scene of the active session.

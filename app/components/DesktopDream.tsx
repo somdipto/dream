@@ -521,7 +521,14 @@ export function DesktopDream() {
   useEffect(() => {
     if (!voice.supported) return;
     return voice.onFinal(onFinalCb);
-  }, [voice.supported, voice, onFinalCb]);
+    // QA16: depend on `voice.onFinal` (the stable useCallback
+    // identity) rather than the `voice` object itself. The
+    // useVoice hook returns a fresh object literal on every
+    // render, so depending on `voice` made this effect
+    // unsub+resub on every keystroke in the text input. Any
+    // `isFinal` event that landed between was dropped. Same
+    // pattern in VoiceDream.
+  }, [voice.supported, voice.onFinal, onFinalCb]);
 
   // On first ready + no active session, also re-paint the last scene
   // of the active session if it has one.

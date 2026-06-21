@@ -61,6 +61,16 @@ export function useRemDrift({ onDrift, paused = false }: RemDriftOptions) {
   useEffect(() => {
     onDriftRef.current = onDrift;
   }, [onDrift]);
+  // QA16 (#176): keep `paused` in a ref too. Without this, the
+  // scheduler closure captured the paused value at mount and
+  // would happily call onDrift() after the user paused — by
+  // the time `paused` flipped true, a tick was already queued
+  // and would fire onDrift() right after, racing the
+  // paint-after-skip that the caller set up to abort.
+  const pausedRef = useRef(paused);
+  useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
 
   useEffect(() => {
     function noteInput() {
@@ -132,7 +142,7 @@ export function useRemDrift({ onDrift, paused = false }: RemDriftOptions) {
       timer = setTimeout(check, 2_000);
     }
     function check() {
-      if (paused) return;
+      if (pausedRef.current) return;
       const now = Date.now();
       const idleFor = now - lastInputAtRef.current;
       const sinceDrift = now - lastDriftAtRef.current;

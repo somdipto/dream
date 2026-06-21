@@ -143,6 +143,13 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
       // Reset all keys when the window loses focus — prevents the
       // user from getting stuck walking forever after alt-tabbing.
       keysRef.current.clear();
+      // QA16: also reset the mouse-look state. Without this, if
+      // the user alt-tabs while their cursor is at the far-right
+      // edge of the window, mouseRef.current stays pinned at
+      // { x: ~1, y: 0 } and the camera keeps spinning right until
+      // the next mousemove lands on the page — which, if the
+      // window is in the background, may be never.
+      mouseRef.current = { x: 0, y: 0 };
       tick();
     }
 

@@ -72,6 +72,15 @@ export function VRView({
   // Orientation lock. Request landscape on enter, release on exit.
   // Audit bug #20: the previous version didn't release on exit, so
   // after VR the device was stuck in landscape.
+  //
+  // QA16 bug #196: on a user who was *already* in landscape when
+  // entering VR, previousOrientation === "landscape-primary",
+  // and the cleanup re-locked landscape. So a user who picked
+  // landscape-primary and entered VR could never rotate the
+  // device back to landscape-secondary without VR re-locking it.
+  // Fix: track orientationchange events while the lock is held,
+  // and only re-acquire the "previous" orientation if it differs
+  // from the one we forced.
   useEffect(() => {
     if (!open) return;
     if (typeof screen === "undefined" || !("orientation" in screen)) return;
@@ -81,6 +90,18 @@ export function VRView({
     } catch {
       previousOrientation = null;
     }
+    // Track whether the user manually rotated while we held the
+    // lock. If they did, that becomes the "previous" orientation
+    // we should restore on exit, not the one we captured on enter.
+    let lastSeenWhileLocked: string | null = previousOrientation;
+    const onChange = () => {
+      try {
+        lastSeenWhileLocked = (screen.orientation as any).type ?? null;
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener("orientationchange", onChange);
     const so = screen.orientation as any;
     if (so?.lock) {
       so.lock("landscape").catch(() => {
@@ -89,18 +110,28 @@ export function VRView({
       });
     }
     return () => {
+      window.removeEventListener("orientationchange", onChange);
       try {
         so?.unlock?.();
       } catch {
         // ignore
       }
-      // Best-effort: re-acquire the user's previous orientation if
-      // we can read it. Most browsers no-op on unlock, which is the
-      // behaviour we want.
-      if (previousOrientation && so?.lock) {
-        const kind = previousOrientation.startsWith("portrait")
+      // Best-effort: re-acquire the orientation the user last
+      // expressed while VR was open. If they never rotated,
+      // lastSeenWhileLocked === previousOrientation, which is
+      // usually identical to the lock we just released — in
+      // that case we skip the re-lock to avoid pinning a
+      // landscape-secondary user who entered from
+      // landscape-primary.
+      const restoreTo = lastSeenWhileLocked || previousOrientation;
+      if (
+        restoreTo &&
+        so?.lock &&
+        !restoreTo.startsWith("landscape")
+      ) {
+        const kind = restoreTo.startsWith("portrait")
           ? "portrait"
-          : "landscape";
+          : "natural";
         so.lock(kind).catch(() => {
           // ignore
         });
