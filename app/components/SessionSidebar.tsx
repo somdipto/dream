@@ -299,7 +299,7 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
               className={[
                 "grid h-9 w-9 place-items-center rounded-full border text-xs",
                 favoritesOnly
-                  ? "border-pink-300/50 bg-pink-500/20 text-pink-200"
+                  ? "border-white/40 bg-white/15 text-white"
                   : "border-white/10 bg-white/5 text-white/55 hover:bg-white/10",
               ].join(" ")}
             >
@@ -350,7 +350,7 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
             ) : (
               <>
                 {favoritesOnly && favoriteCount > 0 && (
-                  <p className="px-3 pb-2 text-[10px] uppercase tracking-wider text-pink-300/80">
+                  <p className="px-3 pb-2 text-[10px] uppercase tracking-wider text-white/60">
                     {favoriteCount} favorite{favoriteCount === 1 ? "" : "s"}
                   </p>
                 )}
@@ -750,7 +750,7 @@ function SessionCard({
                   aria-pressed={!!scene.favorite}
                   data-testid="scene-favorite"
                   className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs hover:bg-white/10 ${
-                    scene.favorite ? "text-pink-300" : "text-white/40"
+                    scene.favorite ? "text-white" : "text-white/40"
                   }`}
                 >
                   {scene.favorite ? "♥" : "♡"}

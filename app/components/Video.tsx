@@ -289,14 +289,13 @@ export function Video() {
   }, [pulseKey]);
 
   return (
-    // M9.13: the old `bg-[#0a0612]` (deep purple-black) was
-    // responsible for the user's "blank black screen" report. Even
-    // with the aurora layered on top, low-saturation screens showed
-    // through to this base color and read as a void. Soft warm cream
-    // (`#fef3e8`) is a "better than black" fallback: if the video
-    // never paints, the user sees a friendly daylight surface, not
-    // a black hole. The aurora gradient still tints it on top.
-    <div className="relative h-full w-full overflow-hidden bg-[#fef3e8]">
+    // Pure black theme. The video surface is a flat black
+    // background. LingBot's first chunks can be near-black; we
+    // keep the placeholder peeking through at low opacity so a
+    // hard black surface doesn't read as a void. The
+    // placeholder itself is also pure black, so the user
+    // perceives one continuous black surface.
+    <div className="relative h-full w-full overflow-hidden bg-black">
       {/* Black placeholder — ALWAYS present (opacity-controlled),
           not toggled in/out. The video stage sits on top. LingBot's
           first chunks can be near-black, so we keep the placeholder

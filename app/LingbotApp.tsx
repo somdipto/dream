@@ -465,7 +465,7 @@ function NewSessionConfirmModal({
         if (e.target === e.currentTarget) onCancel();
       }}
     >
-      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0a0a14]/95 p-5 text-white shadow-2xl">
+      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-black/95 p-5 text-white shadow-2xl">
         <h2
           id="new-session-confirm-title"
           className="text-base font-semibold text-white"
@@ -565,7 +565,7 @@ function ConfirmDialog({
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-6 backdrop-blur"
       onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
     >
-      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0a0a14]/95 p-5 text-white shadow-2xl">
+      <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-black/95 p-5 text-white shadow-2xl">
         <h2 id="confirm-dialog-title" className="text-base font-semibold text-white">{title}</h2>
         <p className="mt-2 text-sm text-white/70">{message}</p>
         <div className="mt-5 flex justify-end gap-2">
@@ -666,7 +666,7 @@ function ShortcutsModal({ onClose }: { onClose: () => void }) {
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0a14]/95 p-5 text-white shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-black/95 p-5 text-white shadow-2xl">
         <h2 id="shortcuts-title" className="text-base font-semibold text-white">
           Keyboard shortcuts
         </h2>
@@ -1360,16 +1360,7 @@ function DreamSurface() {
   // found that noisy. No pure black — they found that a void.
   if (!hasBegun) {
     return (
-      <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0a14] p-6 text-white">
-        <div
-          className="pointer-events-none absolute inset-0"
-          aria-hidden="true"
-          data-testid="begin-warmth"
-          style={{
-            background:
-              "radial-gradient(ellipse at 50% 35%, rgba(253,224,150,0.18) 0%, rgba(244,114,182,0.06) 35%, rgba(10,10,20,0) 70%)",
-          }}
-        />
+      <main className="relative grid min-h-screen place-items-center overflow-hidden bg-black p-6 text-white">
         {/* Recovery banner — surfaces if the previous storage blob was
             unreadable. Gives the user a chance to restore before we
             silently lose the journal. (Audit bug #30.)
@@ -1665,7 +1656,7 @@ function DreamSurface() {
               onClick={() => setVrMode(true)}
               aria-label="Enter VR mode"
               data-testid="vr-btn"
-              className="grid h-10 w-10 place-items-center rounded-full border border-violet-400/40 bg-violet-500/20 text-base text-violet-100 backdrop-blur hover:bg-violet-500/30"
+              className="grid h-10 w-10 place-items-center rounded-full border border-white/30 bg-white/15 text-base text-white backdrop-blur hover:bg-white/25"
             >
               ◐
             </button>
@@ -1726,33 +1717,21 @@ function DreamSurface() {
         ? classifyReactorError(lastError.message)
         : null;
     const isKnownError = classified && classified.reason !== "unknown";
-    // Aurora is shown ONLY while the SDK is actively trying to
-    // connect (no classified error). On a terminal error, fall back
-    // to a quiet black surface so the user can focus on the
-    // message and CTA — the design pass in M9.6 prefers that over
-    // a busy gradient behind the error text.
-    const showAurora = !isKnownError;
+    // Pure black theme: no aurora, no gradient, no warm tint.
+    // The pre-paint journey is a flat black surface with the
+    // (centered) status text and CTA on top. The user's focus
+    // stays on the message — the background carries no
+    // information.
     return (
       <>
         {topbar}
         {sidebar}
-        {/* M9.14: bg-black → bg-[#0a0a14] to match the Begin
-            overlay's warmer base. The connecting state is a
-            continuation of the Begin experience; if the base color
-            changes between them, the user perceives a flash. Same
-            warmer base throughout the pre-paint journey. */}
-        <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#0a0a14] p-6 text-white">
-          {/* Aurora background — same gradient as Video.tsx so the
-              transition from connecting → playing is seamless, with
-              no hard black cut. (M8.4 bug fix; only rendered while
-              we're actively connecting — see showAurora above.) */}
-          {showAurora && (
-            <div
-              className="pointer-events-none absolute inset-0 animate-[aurora-shift_18s_ease-in-out_infinite] bg-[radial-gradient(ellipse_at_top_left,rgba(99,102,241,0.55),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(236,72,153,0.45),transparent_55%),radial-gradient(ellipse_at_top_right,rgba(34,211,238,0.40),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(168,85,247,0.40),transparent_55%)] bg-[length:200%_200%]"
-              aria-hidden="true"
-              data-testid="connect-aurora"
-            />
-          )}
+        {/* Pure black connecting state. The pre-paint journey
+            is now a flat black surface — no warm tint, no
+            aurora gradient, no visual change between Begin,
+            Connecting, and a classified error. The user's
+            focus stays on the (centered) status text. */}
+        <main className="relative grid min-h-screen place-items-center overflow-hidden bg-black p-6 text-white">
           {isKnownError && classified ? (
             <ReactorErrorScreen
               classified={classified}
@@ -1935,11 +1914,11 @@ function DreamSurface() {
       )}
 
       {/* QA12/F10: Director keyboard shortcut toast.
-          Sits just above the prune toast position with a
-          violet tint so it reads as the Director palette. */}
+          Sits just above the prune toast position. White border
+          on translucent white so it reads as a neutral overlay. */}
       {directorToast && (
         <div
-          className="pointer-events-none fixed left-1/2 top-32 z-50 -translate-x-1/2 rounded-full border border-violet-400/40 bg-violet-500/20 px-4 py-1.5 text-xs text-violet-100 shadow-lg backdrop-blur"
+          className="pointer-events-none fixed left-1/2 top-32 z-50 -translate-x-1/2 rounded-full border border-white/30 bg-white/15 px-4 py-1.5 text-xs text-white shadow-lg backdrop-blur"
           role="status"
           aria-live="polite"
           data-testid="director-toast"
