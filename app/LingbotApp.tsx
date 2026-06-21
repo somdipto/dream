@@ -347,7 +347,14 @@ function PromptHistoryChips({
             key={`${p.timestamp}-${i}`}
             type="button"
             onClick={() => onPick({ prompt: p.prompt, seed: p.seed })}
-            className="shrink-0 max-w-[180px] truncate rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] text-white/80 hover:bg-white/15"
+            // QA11/A11Y-4: added aria-label so screen
+            // readers announce the full prompt, not the
+            // truncated visible text. The chip clips with
+            // `truncate` and `title` was also the truncated
+            // value — both made the chip unusable in a
+            // screen reader.
+            aria-label={`Re-dream: ${p.prompt}`}
+            className="shrink-0 max-w-[180px] truncate rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[11px] text-white/85 hover:bg-white/15 min-h-[36px]"
             title={p.prompt}
             data-testid="prompt-history-chip"
           >
@@ -1155,7 +1162,15 @@ function DreamSurface() {
               sessions.createSession({ title: prompt.slice(0, 60), seed: { prompt, seed } });
               setHasBegun(true);
               if (status === "disconnected") void connect();
-              dreamBus.emit("dream:loadScene", { prompt, seed });
+              // QA11/BUG-9: defer the loadScene emit so the
+              // VoiceDream / DesktopDream component has time
+              // to mount its bus listener. Without this, the
+              // first chip tap on the Begin overlay emits to
+              // zero listeners and the world stays black.
+              // 200ms matches the daily-dream path below.
+              setTimeout(() => {
+                dreamBus.emit("dream:loadScene", { prompt, seed });
+              }, 200);
             }}
           />
           <button
@@ -1271,12 +1286,16 @@ function DreamSurface() {
               type="button"
               onClick={() => setSidebarOpen(true)}
               data-testid="active-session-chip"
-              title={`Currently editing: ${sessions.activeSession.title}. Tap to open the sidebar.`}
+              // QA11/A11Y-14: replaced `title` with
+              // `aria-label` so screen readers announce
+              // the full context. `title` is hover-only
+              // and most SRs ignore it.
+              aria-label={`Currently editing ${sessions.activeSession.title}, ${sessions.activeSession.scenes.length} ${sessions.activeSession.scenes.length === 1 ? "scene" : "scenes"}. Tap to open sidebar.`}
               className="min-h-[40px] rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs text-white/85 backdrop-blur hover:bg-white/15"
             >
-              <span className="text-white/55">● </span>
+              <span className="text-white/55" aria-hidden="true">● </span>
               {sessions.activeSession.title}
-              <span className="ml-1.5 text-white/45">
+              <span className="ml-1.5 text-white/45" aria-hidden="true">
                 · {sessions.activeSession.scenes.length}
               </span>
             </button>

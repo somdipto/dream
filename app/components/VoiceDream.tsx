@@ -755,13 +755,22 @@ export function VoiceDream() {
               />
             </div>
           )}
-          <p className="text-[10px] uppercase tracking-wider text-white/50" aria-live="polite">
+          <p
+            className="rounded-full bg-black/70 px-3 py-1 text-[11px] uppercase tracking-wider text-white/85 backdrop-blur"
+            aria-live="polite"
+            // QA11/A11Y-5: bumped to text-white/85 (7:1
+            // contrast on dark) and wrapped in a dark
+            // backdrop pill so the caption reads against
+            // any underlying surface (the cream fallback
+            // during the connecting state used to make
+            // the white caption invisible).
+          >
             {muted
               ? "Muted"
               : voice.listening
                 ? "Listening"
                 : !voice.supported
-                  ? "Mic unavailable"
+                  ? "Mic unavailable — use the text input below"
                   : voice.error
                     ? "Tap to retry"
                     : "Tap to speak"}

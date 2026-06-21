@@ -20,10 +20,28 @@ interface CuratedGalleryProps {
 
 // Cache of seed → objectURL so we don't re-rasterize on
 // every re-render. Survives the component lifecycle as long
-// as the module is loaded. The URLs are revoked on
-// `beforeunload` to avoid leaks.
+// as the module is loaded.
+//
+// QA11/A11Y-13: revoke URLs on `beforeunload` to avoid
+// leaks across page navigations. ~30 scenes × ~40KB per
+// PNG = ~1.2MB of blob URLs held until the tab closes.
+// On long sessions with sidebars frequently opened/closed,
+// this matters.
 const thumbCache = new Map<number, string>();
 const pendingSeeds = new Set<number>();
+
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    for (const url of thumbCache.values()) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        /* noop */
+      }
+    }
+    thumbCache.clear();
+  });
+}
 
 async function loadThumb(seed: number, setUrl: (s: string | null) => void) {
   if (thumbCache.has(seed)) {

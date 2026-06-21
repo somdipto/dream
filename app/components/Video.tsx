@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   LingbotMainVideoView,
   useLingbot,
@@ -382,12 +382,24 @@ export function Video() {
 
 // Subscribe to state and return the most recent snapshot. Wrapped
 // separately so the inner effect can re-run cleanly. Audit bug
-// #10: the previous version re-registered the SDK listener on every
-// state message because the inner `setSnap` callback had a fresh
-// identity. We now use a stable callback and a single subscription.
+// QA11/SDK-1: the previous version re-registered the SDK
+// listener on every state message because the inner `setSnap`
+// callback had a fresh identity. We now use a ref + stable
+// callback so the subscription is bound exactly once per
+// component mount, regardless of how many state messages
+// the SDK pushes.
 function useLingbotStateSnapshot() {
   const [snap, setSnap] = useState<any>(null);
-  useLingbotState((msg) => setSnap(msg));
+  const setSnapRef = useRef(setSnap);
+  setSnapRef.current = setSnap;
+  // useLingbotState's listener is a noop-returning useRef
+  // pattern in the SDK, so the callback identity doesn't
+  // matter for re-subscription, but the fresh-closure
+  // anti-pattern still confused the parent's effect
+  // dep tracking. Stable is better.
+  useLingbotState(useCallback((msg: any) => {
+    setSnapRef.current(msg);
+  }, []));
   return snap as
     | null
     | {

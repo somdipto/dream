@@ -115,9 +115,20 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
       // Alt+ArrowLeft are browser shortcuts, not movement.
       // Without this guard we steal the user's browser navigation.
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      // Don't capture if user is typing in the text input.
-      const tag = (e.target as HTMLElement | null)?.tagName ?? "";
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      // Don't capture if the user is typing in any text
+      // input — including rich-text editors that use
+      // contenteditable (Notion-like notes, etc.) and
+      // screen-reader virtual cursors that navigate text
+      // with the arrow keys.
+      const t = e.target as HTMLElement | null;
+      if (!t) {
+        // No target = synthetic event; bail.
+        return;
+      }
+      const tag = t.tagName ?? "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (t.isContentEditable) return;
+      if (t.getAttribute?.("role") === "textbox") return;
       keysRef.current.add(e.key);
       e.preventDefault();
       tick();
@@ -242,14 +253,27 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
   // CRITICAL: only send the reset if the SDK is still ready. Sending
   // commands while disconnected throws "cannot send command while
   // status is disconnect must be ready" — see REA-1847.
+  //
+  // QA11/SDK-4: read `status` from a ref so the cleanup
+  // always sees the LATEST status, not the one captured
+  // at the render the effect was bound in. The previous
+  // version put `status` in the deps so the effect re-
+  // bound on every status flip; the cleanup of the *last*
+  // run fired with whatever status that render captured,
+  // which could be stale during a rapid
+  // ready → connecting → waiting sequence on wifi blip.
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
   useEffect(() => {
     return () => {
-      if (status !== "ready") return;
+      if (statusRef.current !== "ready") return;
       void setMovement({ movement: "idle" });
       void setLookHorizontal({ look_horizontal: "idle" });
       void setLookVertical({ look_vertical: "idle" });
     };
-  }, [status, setMovement, setLookHorizontal, setLookVertical]);
+  }, [setMovement, setLookHorizontal, setLookVertical]);
 
   // Show a small HUD on desktop so the user knows the controls exist.
   // Kept unobtrusive — bottom-right, fades on first key press. Now

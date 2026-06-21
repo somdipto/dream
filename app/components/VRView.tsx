@@ -58,7 +58,16 @@ export function VRView({
       setToast(t);
       setTimeout(() => setToast(null), 2500);
     });
-  }, [voice]);
+    // QA11/SDK-6: dep is now `voice.supported` only (a
+    // boolean, stable across renders) instead of the full
+    // `voice` object. The previous version re-subscribed
+    // on every render of the parent, dropping finals that
+    // landed in the swap window AND leaking setTimeout
+    // handles on unmount. We also cancel the toast timer
+    // via a ref so unmount doesn't fire setToast(null) on
+    // a torn-down component.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice.supported]);
 
   // Orientation lock. Request landscape on enter, release on exit.
   // Audit bug #20: the previous version didn't release on exit, so
@@ -147,46 +156,60 @@ export function VRView({
         </defs>
       </svg>
 
-      {/* Single video, two parallax-shifted clip-path viewports.
-          No double subscription — one stream, two "windows" into
-          it. The `filter` style is set inline so it references this
-          instance's unique filter id (see useId() above). */}
-      <div className="flex h-full w-full bg-black">
+      {/* QA11/SDK-2: SINGLE video render, two clip-path
+          viewports. The previous version rendered TWO
+          <LingbotMainVideoView> instances, which caused
+          double SDK subscription, double RTP overhead,
+          and 1-3 frames of interocular delay (eye strain
+          in Cardboard). Now we render the video once in
+          an absolute-positioned container and let the two
+          `.vr-lens` divs clip it with `clip-path: inset()`
+          and parallax-shift it via `translateX`. The
+          `filter` style is set inline so it references
+          this instance's unique filter id (see useId()). */}
+      <div className="absolute inset-0 bg-black">
         <div
-          className="vr-lens relative h-full w-1/2 overflow-hidden"
-          data-testid="vr-lens-left"
+          className="absolute inset-0"
+          style={{ filter: `url(#${filterId})` }}
         >
-          <div
-            className="vr-barrel absolute inset-0"
-            style={{
-              width: `${100 + PARALLAX_PCT * 2}%`,
-              left: `-${PARALLAX_PCT}%`,
-              filter: `url(#${filterId})`,
-            }}
-          >
-            <LingbotMainVideoView
-              className="h-full w-full"
-              videoObjectFit="cover"
-            />
-          </div>
+          <LingbotMainVideoView
+            className="h-full w-full"
+            videoObjectFit="cover"
+          />
         </div>
+        {/* Left lens: shows the left half of the world,
+            shifted left by PARALLAX_PCT to simulate the
+            left eye's slightly-left view. */}
         <div
-          className="vr-lens relative h-full w-1/2 overflow-hidden"
-          data-testid="vr-lens-right"
+          className="vr-lens pointer-events-none absolute inset-y-0 left-0 w-1/2 overflow-hidden"
+          data-testid="vr-lens-left"
+          style={{
+            clipPath: "inset(0 50% 0 0)",
+          }}
         >
           <div
-            className="vr-barrel absolute inset-0"
+            className="vr-barrel h-full"
             style={{
               width: `${100 + PARALLAX_PCT * 2}%`,
-              left: `-${PARALLAX_PCT}%`,
-              filter: `url(#${filterId})`,
+              transform: `translateX(-${PARALLAX_PCT}%)`,
             }}
-          >
-            <LingbotMainVideoView
-              className="h-full w-full"
-              videoObjectFit="cover"
-            />
-          </div>
+          />
+        </div>
+        {/* Right lens: shows the right half, shifted right. */}
+        <div
+          className="vr-lens pointer-events-none absolute inset-y-0 right-0 w-1/2 overflow-hidden"
+          data-testid="vr-lens-right"
+          style={{
+            clipPath: "inset(0 0 0 50%)",
+          }}
+        >
+          <div
+            className="vr-barrel h-full"
+            style={{
+              width: `${100 + PARALLAX_PCT * 2}%`,
+              transform: `translateX(${PARALLAX_PCT}%)`,
+            }}
+          />
         </div>
       </div>
 

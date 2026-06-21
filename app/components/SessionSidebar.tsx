@@ -116,6 +116,23 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
     return undefined;
   }, [open]);
 
+  // QA11/A11Y-1: Escape closes the sidebar. The sidebar is
+  // the most-used dialog in the app and was missing an Escape
+  // handler — keyboard users had to find the small × button.
+  // Matches the pattern used by VRView (line 103-110) and
+  // ShortcutsModal (line 611-613).
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   // Mobile-only swipe-down-to-close. Threshold: drag > 100px OR
   // velocity > 0.5 px/ms. We track only the first finger; secondary
   // fingers are ignored.
@@ -226,7 +243,12 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
               type="button"
               role="tab"
               aria-selected={tab === "sessions"}
-              aria-pressed={tab === "sessions"}
+              // QA11/A11Y-15: removed aria-pressed. Tabs
+              // convey state via aria-selected; pressed
+              // is for toggle buttons. SR users were
+              // hearing "tab, selected, pressed" — a
+              // double-state announcement that's
+              // confusing.
               onClick={() => setTab("sessions")}
               data-testid="tab-sessions"
               ref={firstFocusableRef}
@@ -247,7 +269,6 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
               type="button"
               role="tab"
               aria-selected={tab === "discover"}
-              aria-pressed={tab === "discover"}
               onClick={() => setTab("discover")}
               data-testid="tab-discover"
               className={[
@@ -555,7 +576,7 @@ function SessionCard({
           onClick={() => setRenaming((r) => !r)}
           aria-label={renaming ? "Cancel rename" : "Rename session"}
           title="Rename"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs hover:bg-white/10"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs hover:bg-white/10"
         >
           ✎
         </button>
@@ -563,7 +584,7 @@ function SessionCard({
           type="button"
           onClick={onToggle}
           aria-label={isExpanded ? "Hide scenes" : "Show scenes"}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs hover:bg-white/10"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs hover:bg-white/10"
         >
           {isExpanded ? "−" : "+"}
         </button>
@@ -573,7 +594,7 @@ function SessionCard({
           aria-label="Delete session"
           title="Delete (undoable)"
           data-testid="session-delete-btn"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs text-white/60 hover:bg-red-500/30 hover:text-white"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs text-white/60 hover:bg-red-500/30 hover:text-white"
         >
           ×
         </button>
@@ -623,7 +644,7 @@ function SessionCard({
                   aria-label={`Replay "${scene.prompt}"`}
                   title="Replay this scene"
                   data-testid="scene-replay"
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
                 >
                   ↻
                 </button>
@@ -652,7 +673,7 @@ function SessionCard({
                   aria-label={`Continue "${scene.prompt}" from here`}
                   title="Continue from here"
                   data-testid="scene-continue"
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
                 >
                   ➡
                 </button>
@@ -672,7 +693,7 @@ function SessionCard({
                   aria-label={`Download "${scene.prompt}" as PNG`}
                   title="Download as PNG"
                   data-testid="scene-download"
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs text-white/40 hover:bg-white/10 hover:text-white"
                 >
                   ↓
                 </button>
@@ -685,7 +706,7 @@ function SessionCard({
                   aria-label={scene.favorite ? "Unfavorite scene" : "Favorite scene"}
                   aria-pressed={!!scene.favorite}
                   data-testid="scene-favorite"
-                  className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs hover:bg-white/10 ${
+                  className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs hover:bg-white/10 ${
                     scene.favorite ? "text-pink-300" : "text-white/40"
                   }`}
                 >
@@ -695,7 +716,7 @@ function SessionCard({
                   type="button"
                   onClick={() => onRemoveScene(scene.id)}
                   aria-label="Remove scene"
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs text-white/50 hover:bg-red-500/30 hover:text-white"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-xs text-white/50 hover:bg-red-500/30 hover:text-white"
                 >
                   ×
                 </button>

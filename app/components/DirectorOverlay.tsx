@@ -125,9 +125,13 @@ export function DirectorOverlay() {
       };
       setLook(merged);
     }
-    // Apply on mount in case a chip was already clicked before
-    // the overlay mounted.
-    apply({ styleId: null, variantId: null });
+    // QA11/SDK-8: do NOT call `apply({null,null})` on mount.
+    // If the bus was already primed with a non-null state
+    // (e.g. user picked Noir, then opened a modal that
+    // mounted a second DirectorOverlay), the second
+    // instance's apply call would clobber the primed state
+    // back to NO_LOOK. Just subscribe; the chip owner
+    // re-emits on every change.
     const off = dreamBus.on("dream:directorChange", apply);
     return off;
   }, []);
@@ -140,39 +144,16 @@ export function DirectorOverlay() {
       data-testid="director-overlay"
       aria-hidden="true"
     >
-      {/* Color-grade layer. Wraps only the visible content
-          via mix-blend-mode on the overlay above. We use a
-          separate colored layer instead of `filter` on the
-          video so the audio + level meter aren't blurred. */}
-      <div
-        className="absolute inset-0 transition-[filter] duration-700 ease-out"
-        style={{
-          // The "filter" affects everything below this layer
-          // in the stacking context, but since it's a flat
-          // overlay over the video, this just tints it.
-          backdropFilter: "none",
-          background:
-            look.filter !== "none" && look.filter.includes("grayscale")
-              ? "rgba(0,0,0,0)"
-              : "transparent",
-          // Apply via a sibling div instead (see below).
-        }}
-      />
-
-      {/* The actual color-grade div, sitting between the
-          video and the letterbox/vignette/grain layers.
-          We keep the layer ordering stable so we don't
-          cause re-paints. */}
+      {/* QA11/SDK-13: removed the dead "color-grade layer"
+          div above that did nothing (had `transition-[filter]`
+          but no `filter` style). The actual grade lives in
+          the next div. */}
       <div
         className="absolute inset-0 transition-[filter] duration-700 ease-out"
         data-testid="director-grade"
         style={{
           filter: look.filter,
           mixBlendMode: "normal",
-          // mix-blend-mode "color" would replace the
-          // underlying color with our (no) fill — useless.
-          // We use plain "filter" which lets the browser
-          // GPU-composite it cheaply.
         }}
       />
 
