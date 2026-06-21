@@ -458,3 +458,94 @@ test("dream:toast — kind defaults to info when omitted by an emitter", () => {
   }
   off();
 });
+
+// Round 8 regression tests: session sidebar download serialization,
+// VoiceDream share URL handling, MobileFlickPaint timer cancel on
+// disable, and useAmbient pendingPatchRef reset on toggle.
+
+test("round-8: SessionSidebar downloadScenePng serializes concurrent calls", () => {
+  // Static check: the module-level `downloadChain` Promise exists.
+  // Two rapid downloads should not race — the second waits for
+  // the first's paintDone to fire.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const ts = fs.readFileSync(
+    path.join(process.cwd(), "app/components/SessionSidebar.tsx"),
+    "utf8",
+  );
+  // The chain ref should exist and be awaited.
+  assert.match(
+    ts,
+    /let downloadChain:\s*Promise<void>\s*=\s*Promise\.resolve\(\)/,
+    "SessionSidebar should have a module-level downloadChain",
+  );
+  // downloadScenePng should chain onto it.
+  assert.match(
+    ts,
+    /downloadChain\.then\(\(\) => doDownload/,
+    "downloadScenePng should chain onto downloadChain via .then",
+  );
+});
+
+test("round-8: VoiceDream readDreamFromUrl addScene happens inside timer", () => {
+  // Static check: addScene should NOT be called synchronously in
+  // the readDreamFromUrl effect. Both addScene and paintDreamRef
+  // should be deferred inside the setTimeout so unmount cancels
+  // both.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const ts = fs.readFileSync(
+    path.join(process.cwd(), "app/components/VoiceDream.tsx"),
+    "utf8",
+  );
+  // Locate the readDreamFromUrl effect by finding the line that
+  // reads `const shared = readDreamFromUrl();` and slicing 25
+  // lines of source from there.
+  const lines = ts.split("\n");
+  const startIdx = lines.findIndex((l) => l.includes("readDreamFromUrl()"));
+  assert.ok(startIdx > -1, "readDreamFromUrl() should appear in VoiceDream");
+  const effect = lines.slice(startIdx - 2, startIdx + 20).join("\n");
+  // The addScene call should be AFTER the setTimeout line.
+  const addSceneIdx = effect.indexOf("sessions.addScene");
+  const setTimeoutIdx = effect.indexOf("setTimeout");
+  assert.ok(
+    setTimeoutIdx !== -1 && addSceneIdx !== -1 && setTimeoutIdx < addSceneIdx,
+    "addScene should be deferred inside the setTimeout, not called synchronously",
+  );
+});
+
+test("round-8: MobileFlickPaint timer cancels on enabled/voiceListening change", () => {
+  // Static check: there should be a useEffect that cancels timers
+  // when enabled or voiceListening flips.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const ts = fs.readFileSync(
+    path.join(process.cwd(), "app/components/MobileFlickPaint.tsx"),
+    "utf8",
+  );
+  // Look for a useEffect that depends on enabled and voiceListening
+  // and calls cancel().
+  assert.match(
+    ts,
+    /useEffect\(\(\) => \{[\s\S]*?if \(!enabled \|\| voiceListening\) cancel\(\)[\s\S]*?\}, \[enabled, voiceListening, cancel\]\)/,
+    "MobileFlickPaint should cancel armed timers when disabled or voice starts",
+  );
+});
+
+test("round-8: useAmbient pendingPatchRef resets on on()", () => {
+  // Static check: when the user toggles ambient on, pendingPatchRef
+  // should reset to DEFAULT_PATCH so the audio syncs with the
+  // live scene instead of a stale cached patch.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const ts = fs.readFileSync(
+    path.join(process.cwd(), "app/hooks/useAmbient.ts"),
+    "utf8",
+  );
+  // The on() function should reset both refs.
+  assert.match(
+    ts,
+    /pendingPatchRef\.current = DEFAULT_PATCH[\s\S]*?currentPatchRef\.current = DEFAULT_PATCH/,
+    "useAmbient on() should reset pending and current patch refs",
+  );
+});

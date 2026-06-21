@@ -56,6 +56,14 @@ function QuickFlickStrip({
     setPressed(null);
   }, []);
 
+  // Round 8 fix: cancel any armed 500ms timer when flicks
+  // are disabled or when voice starts listening. Without
+  // this, a timer started before voiceListening flipped
+  // to true would fire 500ms later and emit a stale flick.
+  useEffect(() => {
+    if (!enabled || voiceListening) cancel();
+  }, [enabled, voiceListening, cancel]);
+
   const start = useCallback((kind: FlickKind) => {
     if (!enabled || voiceListening) return;
     cancel();

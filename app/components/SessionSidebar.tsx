@@ -459,9 +459,26 @@ function truncate(s: string, max: number): string {
 // keeps up to date. If the paint fails or times out, we
 // fall back to the deterministic seed-image function so
 // the user always gets a PNG.
+//
+// Round 8 fix: two rapid scene downloads were racing — both
+// fired abortPaint+loadScene, the second's abort killed the
+// first's paint, the first's listener caught the second's
+// ok:true and downloaded the WRONG PNG. We now serialize
+// downloads through a per-process queue; the second one
+// starts only after the first's paintDone fires.
+let downloadChain: Promise<void> = Promise.resolve();
 async function downloadScenePng(scene: { prompt: string; seed: number; id: string }) {
   const safe = scene.prompt.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 40) || "dream";
   const filename = `${safe}-${scene.seed.toString(16)}.png`;
+  const next = downloadChain.then(() => doDownload(scene, filename));
+  downloadChain = next.catch(() => undefined);
+  await next;
+}
+
+async function doDownload(
+  scene: { prompt: string; seed: number; id: string },
+  filename: string,
+) {
   // Tell the world to render this scene fresh. The next
   // paint's URL will land in the bus's "last image url"
   // bucket (see Video.tsx and VoiceDream.tsx — they keep

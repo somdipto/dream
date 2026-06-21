@@ -308,6 +308,14 @@ export function useAmbient({ enabled, paused = false, duckWhileListening = false
     }
     isOnRef.current = true;
     setIsOn(true);
+    // Round 8 fix: flush the pending patch on `on()` so
+    // it re-syncs from the current scene. Without this,
+    // pendingPatchRef drifts when ambient is off and
+    // the user has painted multiple dreams; toggling
+    // ambient on would play the WRONG patch for the
+    // live world.
+    pendingPatchRef.current = DEFAULT_PATCH;
+    currentPatchRef.current = DEFAULT_PATCH;
   }, []);
 
   const off = useCallback(() => {

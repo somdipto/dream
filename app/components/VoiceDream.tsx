@@ -582,14 +582,21 @@ export function VoiceDream() {
 
   // On mount, if the URL contains a shared dream (`?d=...`), auto-paint
   // it. This is the entry point for shareable URLs.
+  //
+  // Round 8 fix: the scene was being added to the user's CURRENT
+  // session SYNCHRONOUSLY before the timer even started, so a
+  // mobile back-button tap that unmounted the surface within
+  // 250ms still polluted the active journal with a phantom
+  // shared-dream entry. Now both the addScene and the paint
+  // happen inside the timer; unmount cancels both.
   useEffect(() => {
     const shared = readDreamFromUrl();
     if (!shared) return;
     setLastPrompt(shared.prompt);
     setLastSeed(shared.seed);
     setText(shared.prompt);
-    sessions.addScene({ prompt: shared.prompt, seed: shared.seed });
     const t = setTimeout(() => {
+      sessions.addScene({ prompt: shared.prompt, seed: shared.seed });
       void paintDreamRef.current(shared.prompt, { seed: shared.seed });
     }, 250);
     clearDreamFromUrl();
