@@ -10,7 +10,8 @@ import { StatusBadge } from "./components/StatusBadge";
 import { CommandError } from "./components/CommandError";
 import { VoiceDream } from "./components/VoiceDream";
 import { GyroController } from "./components/GyroController";
-import { cycleStyle, cycleVariant, resetDirector } from "./lib/director-state";
+import { cycleStyle, cycleVariant, resetDirector, setDirectorState, getDirectorState } from "./lib/director-state";
+import { timeBandForNow, variantIdForBand, labelForBand } from "./lib/time-of-day";
 import { DesktopController } from "./components/DesktopController";
 import { DesktopDream } from "./components/DesktopDream";
 import { SessionSidebar } from "./components/SessionSidebar";
@@ -875,6 +876,36 @@ function DreamSurface() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [hasBegun, shortcutsOpen]);
+
+  // QA14/F12: Time-of-day auto-shift. The first time the
+  // world mounts, set the Director variant to match the
+  // user's local clock so the cinema filter tints
+  // accordingly (golden hour at dusk, night at 11pm).
+  // We only fire on the rising edge of `hasBegun` (so a
+  // user who picks a chip afterwards isn't overridden).
+  // Disabled on VR (no Director visible). Stored under a
+  // ref so the rising-edge detection is stable across
+  // re-renders.
+  const lastAutoShiftedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!hasBegun) return;
+    if (lastAutoShiftedRef.current !== null) return;
+    lastAutoShiftedRef.current = "applied";
+    const band = timeBandForNow();
+    const variant = variantIdForBand(band);
+    const current = getDirectorState();
+    // Only override if the user hasn't already picked a
+    // variant (the chip owner is the source of truth).
+    if (current.variantId === null) {
+      setDirectorState({ variantId: variant });
+      if (band !== "none") {
+        // Show a brief violet toast so the user knows the
+        // shift is intentional (not a bug).
+        showDirectorToast(`Auto-shifted to ${labelForBand(band)}`);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasBegun]);
 
   const handleBegin = useCallback(async () => {
     if (platform.isMobile) {
