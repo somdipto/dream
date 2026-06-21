@@ -10,6 +10,7 @@ import { StatusBadge } from "./components/StatusBadge";
 import { CommandError } from "./components/CommandError";
 import { VoiceDream } from "./components/VoiceDream";
 import { GyroController } from "./components/GyroController";
+import { cycleStyle, cycleVariant, resetDirector } from "./lib/director-state";
 import { DesktopController } from "./components/DesktopController";
 import { DesktopDream } from "./components/DesktopDream";
 import { SessionSidebar } from "./components/SessionSidebar";
@@ -599,6 +600,17 @@ const SHORTCUT_GROUPS: Array<{ title: string; items: Array<[string, string]> }> 
     ],
   },
   {
+    // QA12/F10: keyboard-driven director cycling.
+    title: "Director",
+    items: [
+      ["D", "Cycle cinema style (next)"],
+      ["Shift + D", "Cycle cinema style (previous)"],
+      ["N", "Cycle time / weather variant (next)"],
+      ["Shift + N", "Cycle time / weather variant (previous)"],
+      ["0", "Clear director look"],
+    ],
+  },
+  {
     title: "Journal",
     items: [
       ["☰", "Open the saved-scenes sidebar"],
@@ -756,6 +768,15 @@ function DreamSurface() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [vrMode, setVrMode] = useState(false);
   const [pruneToast, setPruneToast] = useState<string | null>(null);
+  // QA12/F10: Director keyboard shortcut toast. Shows
+  // "Director: noir" for 1.2s after D/N/0.
+  const [directorToast, setDirectorToast] = useState<string | null>(null);
+  const directorToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDirectorToast = useCallback((msg: string) => {
+    setDirectorToast(msg);
+    if (directorToastTimer.current) clearTimeout(directorToastTimer.current);
+    directorToastTimer.current = setTimeout(() => setDirectorToast(null), 1200);
+  }, []);
   // QA4: ? opens the keyboard-shortcuts overlay. Dismissed
   // with Escape or by tapping outside. Available on every
   // platform because mobile users with bluetooth keyboards
@@ -809,10 +830,41 @@ function DreamSurface() {
       // Ignore key combos with modifiers so we don't steal
       // browser shortcuts.
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Don't intercept while the user is typing in any
+      // text input. Same rules as the desktop controller.
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName ?? "";
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+        if (t.getAttribute?.("role") === "textbox") return;
+      }
       // ? or Shift+/
       if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
         e.preventDefault();
         setShortcutsOpen((v) => !v);
+        return;
+      }
+      // QA12/F10: Director keyboard shortcuts.
+      //   D / Shift+D → cycle style forward/backward
+      //   N / Shift+N → cycle variant forward/backward
+      //   0           → reset to no look
+      if (e.key === "d" || e.key === "D") {
+        e.preventDefault();
+        const next = cycleStyle(e.shiftKey ? -1 : 1);
+        if (next) showDirectorToast(`Director: ${next}`);
+        return;
+      }
+      if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
+        const next = cycleVariant(e.shiftKey ? -1 : 1);
+        if (next) showDirectorToast(`Variant: ${next}`);
+        return;
+      }
+      if (e.key === "0") {
+        e.preventDefault();
+        resetDirector();
+        showDirectorToast("Director: cleared");
         return;
       }
       if (e.key === "Escape" && shortcutsOpen) {
@@ -1498,7 +1550,25 @@ function DreamSurface() {
           paint-specific crashes so the user can still
           open the sidebar to grab their saved sessions. */}
       {/* Video fills the screen as background. */}
-      <div className="fixed inset-0 z-0">
+      <div
+        className="fixed inset-0 z-0 transition-transform duration-500 ease-out"
+        style={{
+          // QA12/F9: Mini-Player. When the sidebar opens
+          // on desktop, the world shrinks into a corner
+          // so the user can keep walking while reading
+          // the journal. Skipped on mobile (the bottom
+          // sheet IS the journal) and in VR (where the
+          // user is wearing a headset). The transform is
+          // pure CSS — no re-mount, no state churn.
+          transform:
+            sidebarOpen && !platform.isMobile && !vrMode
+              ? "translate(-72%, -72%) scale(0.28)"
+              : undefined,
+          transformOrigin: "top right",
+        }}
+        data-testid="dream-canvas"
+        data-pip={sidebarOpen && !platform.isMobile && !vrMode ? "true" : "false"}
+      >
         <ErrorBoundary label="Dream canvas">
           <Video />
           {/* QA6/F2: Director overlay — CSS cinema filter that
@@ -1508,6 +1578,24 @@ function DreamSurface() {
           <DirectorOverlay />
         </ErrorBoundary>
       </div>
+
+{/* QA12/F9: "Expand" button visible only when the
+          Mini-Player is active. Restores fullscreen by
+          closing the sidebar. Sits in the top-right of
+          the (now small) world, so the user can quickly
+          jump back. */}
+      {sidebarOpen && !platform.isMobile && !vrMode && hasBegun && (
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(false)}
+          aria-label="Expand the dream back to fullscreen"
+          title="Expand to fullscreen"
+          data-testid="pip-expand-btn"
+          className="fixed right-4 top-4 z-30 grid h-10 w-10 place-items-center rounded-full border border-white/15 bg-black/70 text-sm text-white/85 backdrop-blur hover:bg-black/85"
+        >
+          ⤢
+        </button>
+      )}
 
       {/* Virtual joystick fallback — rendered ABOVE the video and
           BELOW the top/bottom bars. Only shown on mobile when motion
@@ -1547,6 +1635,20 @@ function DreamSurface() {
       {pruneToast && (
         <div className="pointer-events-none fixed left-1/2 top-20 z-50 -translate-x-1/2 rounded-full border border-amber-400/40 bg-amber-500/20 px-4 py-1.5 text-xs text-amber-100 shadow-lg backdrop-blur">
           {pruneToast}
+        </div>
+      )}
+
+      {/* QA12/F10: Director keyboard shortcut toast.
+          Sits just above the prune toast position with a
+          violet tint so it reads as the Director palette. */}
+      {directorToast && (
+        <div
+          className="pointer-events-none fixed left-1/2 top-32 z-50 -translate-x-1/2 rounded-full border border-violet-400/40 bg-violet-500/20 px-4 py-1.5 text-xs text-violet-100 shadow-lg backdrop-blur"
+          role="status"
+          aria-live="polite"
+          data-testid="director-toast"
+        >
+          {directorToast}
         </div>
       )}
 
