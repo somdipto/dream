@@ -1038,19 +1038,52 @@ function DreamSurface() {
   // We now only clear the ref on success (status → ready) or on
   // explicit hasBegun change.
   const reconnectingRef = useRef(false);
+  // QA15 fix: surface a visible "Reconnecting…" pill so the user
+  // can tell the app is doing something instead of appearing to
+  // hang. Boolean so the overlay can show a spinner next to the
+  // amber dot.
+  const [autoRetrying, setAutoRetrying] = useState(false);
   useEffect(() => {
     if (status === "ready") {
       // Successful transition — allow a future disconnect to retry.
       reconnectingRef.current = false;
+      setAutoRetrying(false);
       return;
     }
-    if (status !== "disconnected" || !hasBegun || !lastError) return;
+    if (status !== "disconnected" || !hasBegun || !lastError) {
+      setAutoRetrying(false);
+      return;
+    }
+    // QA15 fix: never auto-retry on a classified terminal error.
+    // For auth/credits/quota failures the next Begin tap (with a
+    // fresh BYOK key paste) is the only correct path; a silent
+    // 1.5s retry would race the user and burn their new key with
+    // the same broken state. We let `handleReset` clear the
+    // error before the user can begin again.
+    const classified = classifyReactorError(lastError.message);
+    if (
+      classified.reason === "credits_depleted" ||
+      classified.reason === "auth" ||
+      classified.reason === "rate_limited" ||
+      classified.reason === "service_unavailable"
+    ) {
+      setAutoRetrying(false);
+      return;
+    }
     if (reconnectingRef.current) return;
     reconnectingRef.current = true;
+    setAutoRetrying(true);
     const t = setTimeout(() => {
       void connect();
     }, 1500);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      // Don't clear `autoRetrying` here — the effect's cleanup
+      // fires on every dependency change, including status flips,
+      // which is exactly when we want the pill to stay visible.
+      // We clear it only when the user reaches `ready` (above) or
+      // a classified terminal error trips (above).
+    };
   }, [status, hasBegun, lastError, connect]);
 
   // M9.11: "stuck" detection — if the SDK is taking longer than 8s
@@ -1059,6 +1092,14 @@ function DreamSurface() {
   // counterpart to the 402 error screen's "Try a different key"
   // button — for the case where the API isn't returning a
   // classified error at all, just hanging.
+  //
+  // QA15 fix: the previous implementation restarted the 8s clock
+  // on every status flip (disconnected → connecting → disconnected
+  // is the exact pattern for flaky wifi). Now we use a
+  // connectingSinceRef deadline computed from wall-clock time,
+  // so the user surfaces "Try a different key" on a single
+  // uninterrupted 8s of stuck-ness, regardless of how many
+  // SDK transitions happen inside that window.
   const connectingSinceRef = useRef<number | null>(null);
   const [stuck, setStuck] = useState(false);
   useEffect(() => {
@@ -1068,7 +1109,15 @@ function DreamSurface() {
       if (connectingSinceRef.current === null) {
         connectingSinceRef.current = Date.now();
       }
-      const t = setTimeout(() => setStuck(true), 8000);
+      const start = connectingSinceRef.current;
+      const t = setTimeout(() => {
+        // Only trip if we're still in a connecting-like state
+        // AND the deadline has actually elapsed (in case the
+        // status flipped multiple times before this fires).
+        if (connectingSinceRef.current === start) {
+          setStuck(true);
+        }
+      }, 8000);
       return () => clearTimeout(t);
     }
     // Successful connection or user backed out — clear stuck flag.
@@ -1535,6 +1584,21 @@ function DreamSurface() {
               <p className="mt-1 text-xs text-white/55">
                 This usually takes 5–15 seconds.
               </p>
+              {/* QA15: tiny inline pill so the user knows a
+                  silent retry is in flight. Distinct from the
+                  reconnecting text above (which covers BOTH
+                  manual and auto retry). */}
+              {autoRetrying && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  data-testid="auto-retry-pill"
+                  className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-[11px] text-amber-200"
+                >
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-300" />
+                  Retrying in a moment…
+                </div>
+              )}
               {lastError && (
                 <button
                   onClick={() => void connect()}

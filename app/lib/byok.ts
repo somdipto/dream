@@ -42,19 +42,22 @@ function isValidShape(k: string): boolean {
 }
 
 /** Load the saved user key from localStorage. Returns the raw key
- *  if present and shape-valid, otherwise null. */
+ *  if present and shape-valid, otherwise null. The returned value
+ *  is always trimmed — any stray whitespace is stripped before
+ *  being handed to the caller. */
 export function loadUserKey(): string | null {
   if (typeof window === "undefined") return null;
   try {
     const v = window.localStorage.getItem(STORAGE_KEY);
     if (!v) return null;
-    if (!isValidShape(v)) {
+    const trimmed = v.trim();
+    if (!isValidShape(trimmed)) {
       // Garbled in storage — clean it out so the UI doesn't show
       // a stale fingerprint for a key that won't work.
       window.localStorage.removeItem(STORAGE_KEY);
       return null;
     }
-    return v;
+    return trimmed;
   } catch {
     return null;
   }

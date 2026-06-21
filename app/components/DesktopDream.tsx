@@ -180,7 +180,7 @@ export function DesktopDream() {
 
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
       const timeoutPromise = new Promise<"timeout">((resolve) => {
-        timeoutId = setTimeout(() => resolve("timeout"), 8000);
+        timeoutId = setTimeout(() => resolve("timeout"), 30000);
       });
       const pipeline = (async (): Promise<"ok" | "err"> => {
         try {

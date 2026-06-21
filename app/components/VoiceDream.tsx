@@ -205,9 +205,18 @@ export function VoiceDream() {
       const seed = (opts?.seed ?? hashSeed(text + ":" + sessionNonceRef.current.toString(16))) >>> 0;
       setLastSeed(seed);
 
+      // QA15 fix: raised from 8s → 30s. The Begin overlay tells
+      // the user "this usually takes 5-15 seconds" but the first
+      // paint of a fresh connection takes 8-20s on a slow link
+      // (uploadFile round-trip + image upload + first chunk). At
+      // 8s the timeout fired reliably for the very first paint
+      // and showed the red "Reactor is slow" banner even though
+      // the world was about to stream. 30s gives the pipeline a
+      // real chance while still surfacing an error on a genuine
+      // hang.
       let timeoutId: ReturnType<typeof setTimeout> | null = null;
       const timeoutPromise = new Promise<"timeout">((resolve) => {
-        timeoutId = setTimeout(() => resolve("timeout"), 8000);
+        timeoutId = setTimeout(() => resolve("timeout"), 30000);
       });
       const pipeline = (async (): Promise<"ok" | "err"> => {
         try {

@@ -99,3 +99,21 @@ export function classifyReactorError(message: string | null | undefined): Classi
     ctaLabel: "Try again",
   };
 }
+
+/**
+ * QA15: identifies errors that the user must resolve
+ * themselves (typically via a CTA on the error screen).
+ * Auto-retry should be SKIPPED for these — a silent retry
+ * would burn another attempt without the user doing
+ * anything to fix the underlying problem.
+ */
+export function isClassifiedTerminal(
+  reason: ReactorErrorReason,
+): boolean {
+  return (
+    reason === "credits_depleted" ||
+    reason === "auth" ||
+    reason === "rate_limited" ||
+    reason === "service_unavailable"
+  );
+}
