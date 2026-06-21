@@ -82,6 +82,18 @@ export function useMotion(
   // the returned wrapper object — DirectorOverlay,
   // VRView's lookV/lookH, GyroController, etc.
   const lastExposedRef = useRef({ pitch: 0, roll: 0, yaw: 0 });
+  // QA17: mirror of `tilt.available` for use inside the
+  // onOrientation callback. The callback captures `tilt` from
+  // the closure (and the effect deps are [permission, alpha],
+  // both stable), so `tilt.available` is forever false inside
+  // the callback even after the very first event flips it
+  // true. That re-entered the `if (!tilt.available)` branch
+  // on every subsequent event and called setTilt({available:true})
+  // again — a no-op for React but a guaranteed re-render of
+  // every motion consumer on every frame. Read/write the
+  // ref instead and let the real `tilt` state stay for
+  // the public hook surface.
+  const availableRef = useRef(false);
   const TILT_QUANTUM_DEG = 0.5;
 
   const requestPermission = useCallback(async (): Promise<"granted" | "denied" | "unsupported"> => {
@@ -169,7 +181,11 @@ export function useMotion(
       ) {
         // First event after permission grant — we MUST flip
         // `available` true so consumers know motion is live.
-        if (!tilt.available) {
+        // QA17: read the ref, not the closure — see
+        // availableRef declaration for the stale-closure bug
+        // this fixes.
+        if (!availableRef.current) {
+          availableRef.current = true;
           last.pitch = pitch;
           last.roll = roll;
           last.yaw = yaw;
@@ -180,6 +196,9 @@ export function useMotion(
       last.pitch = pitch;
       last.roll = roll;
       last.yaw = yaw;
+      // QA17: keep the ref in sync so the first-event branch
+      // (above) doesn't fire again on the next frame.
+      availableRef.current = true;
       setTilt({ pitch, roll, yaw, available: true });
     };
 

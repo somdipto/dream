@@ -68,9 +68,18 @@ export function useMotionFlicks({ paused, onFlick }: MotionFlicksOptions) {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (paused) return;
-    let lastYaw: number | null = null;
-    let lastT = 0;
-    let coolUntil = 0;
+    // QA17: hoist gesture state into refs so a paused-toggle
+    // re-bind doesn't reset the in-flight flick. The previous
+    // design used locals inside this effect with [paused] in
+    // the deps array — every flip of `paused` re-bound the
+    // listener and zeroed lastYaw / lastT / coolUntil, which
+    // (a) reset a flick that was still mid-cooldown and (b)
+    // made the next deviceorientation event look like a
+    // "first" event, dropping dyaw/dt to zero and breaking
+    // the rate calculation for one frame.
+    const lastYawRef: { current: number | null } = { current: null };
+    const lastTRef: { current: number } = { current: 0 };
+    const coolUntilRef: { current: number } = { current: 0 };
 
     function onOrient(e: DeviceOrientationEvent) {
       if (pausedRef.current) return;
@@ -85,19 +94,19 @@ export function useMotionFlicks({ paused, onFlick }: MotionFlicksOptions) {
       ) {
         return;
       }
-      if (lastYaw === null) {
-        lastYaw = yaw;
-        lastT = now;
+      if (lastYawRef.current === null) {
+        lastYawRef.current = yaw;
+        lastTRef.current = now;
         return;
       }
-      const dt = Math.max(1, now - lastT);
+      const dt = Math.max(1, now - lastTRef.current);
       // Yaw wraps at 360 — choose the signed shortest path.
-      let dyaw = yaw - lastYaw;
+      let dyaw = yaw - lastYawRef.current;
       if (dyaw > 180) dyaw -= 360;
       if (dyaw < -180) dyaw += 360;
       const yawRate = (dyaw / dt) * 1000; // deg / sec
       const nowMs = Date.now();
-      const cool = nowMs < coolUntil;
+      const cool = nowMs < coolUntilRef.current;
       if (!cool) {
         if (Math.abs(yawRate) >= YAW_FLICK_DEG_PER_SEC) {
           onFlickRef.current({
@@ -105,32 +114,32 @@ export function useMotionFlicks({ paused, onFlick }: MotionFlicksOptions) {
             magnitude: yawRate,
             at: nowMs,
           });
-          coolUntil = nowMs + FLICK_COOLDOWN_MS;
+          coolUntilRef.current = nowMs + FLICK_COOLDOWN_MS;
         } else if (pitch >= PITCH_FLICK_FORWARD_DEG) {
           onFlickRef.current({
             kind: "dive",
             magnitude: pitch,
             at: nowMs,
           });
-          coolUntil = nowMs + FLICK_COOLDOWN_MS;
+          coolUntilRef.current = nowMs + FLICK_COOLDOWN_MS;
         } else if (pitch <= PITCH_FLICK_BACK_DEG) {
           onFlickRef.current({
             kind: "lift",
             magnitude: pitch,
             at: nowMs,
           });
-          coolUntil = nowMs + FLICK_COOLDOWN_MS;
+          coolUntilRef.current = nowMs + FLICK_COOLDOWN_MS;
         } else if (Math.abs(roll) >= ROLL_FLICK_DEG) {
           onFlickRef.current({
             kind: "roll",
             magnitude: roll,
             at: nowMs,
           });
-          coolUntil = nowMs + FLICK_COOLDOWN_MS;
+          coolUntilRef.current = nowMs + FLICK_COOLDOWN_MS;
         }
       }
-      lastYaw = yaw;
-      lastT = now;
+      lastYawRef.current = yaw;
+      lastTRef.current = now;
     }
 
     window.addEventListener("deviceorientation", onOrient);

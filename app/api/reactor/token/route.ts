@@ -527,7 +527,14 @@ export async function GET(req: Request) {
         {
           headers: {
             "Cache-Control": `private, max-age=${maxAge}`,
-            Vary: "Cookie, Authorization",
+            // QA17: also Vary on X-Reactor-User-Key. The
+            // BYOK path lets a client send their own key in
+            // a header and our keyPool can hold per-user
+            // reservations on it. Without varying on the
+            // header, a CDN serving two different users
+            // from the same edge could return key A's JWT
+            // to user B.
+            Vary: "Cookie, Authorization, X-Reactor-User-Key",
           },
         },
       );
@@ -540,14 +547,27 @@ export async function GET(req: Request) {
       continue;
     }
     if (result.upstreamStatus === 401 || result.upstreamStatus === 403) {
-      // Auth failure is fatal. Do NOT try the next key — if one key
-      // is malformed, the rest probably are too. Park this one
-      // briefly so we don't hot-loop the same bad key, and surface.
-      keyPool.park(idx, 60_000, "auth rejected");
-      return NextResponse.json(
-        { error: result.error },
-        { status: 401, headers: { "Cache-Control": "no-store" } },
-      );
+      // QA17: auth failure used to be a hard stop — one bad
+      // key would 401 the whole route for 60s (the park
+      // window), which meant every client saw "out of
+      // credits" even though we had N-1 other valid keys in
+      // the pool. The previous rationale ("if one key is
+      // malformed the rest probably are too") is true for
+      // AUTH REJECTION at the user level — but our pool
+      // mixes shared env keys with per-user BYOK keys, and
+      // a single stale BYOK shouldn't take the whole route
+      // down. Park briefly and try the next key; if all
+      // keys reject, surface 401 to the caller. The pool
+      // itself is bounded, so this isn't an unbounded loop.
+      keyPool.park(idx, 5_000, "auth rejected");
+      // If we've now exhausted every key in the pool, surface.
+      if (keyPool.healthy().length === 0) {
+        return NextResponse.json(
+          { error: result.error },
+          { status: 401, headers: { "Cache-Control": "no-store" } },
+        );
+      }
+      continue;
     }
     if (result.upstreamStatus === 429) {
       // 429 is per-IP/global at the SDK, not per-key. Rotating

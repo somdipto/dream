@@ -44,6 +44,12 @@ export function VRView({
   const voice = useVoice();
   const [showExit, setShowExit] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
+  // QA17: track the active toast-clear timer so consecutive
+  // voice finals don't race (the 2.5s timeout from the
+  // previous phrase would wipe the new phrase's toast early).
+  // Also cleared on unmount to avoid the classic
+  // setState-after-unmount warning.
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Unique id for the SVG <filter> this instance declares. With
   // React's `useId` the id is stable across renders and unique
   // across instances, so two VRView mounts in the DOM don't shadow
@@ -52,12 +58,29 @@ export function VRView({
 
   useEffect(() => {
     if (!voice.supported) return;
-    return voice.onFinal((text) => {
+    const off = voice.onFinal((text) => {
       const t = text.trim();
       if (!t) return;
+      // QA17: cancel any pending clear from the previous
+      // phrase before installing a fresh 2.5s window — see
+      // toastTimerRef declaration. Mount/unmount symmetry
+      // is handled by the cleanup block below.
+      if (toastTimerRef.current != null) {
+        clearTimeout(toastTimerRef.current);
+      }
       setToast(t);
-      setTimeout(() => setToast(null), 2500);
+      toastTimerRef.current = setTimeout(() => {
+        setToast(null);
+        toastTimerRef.current = null;
+      }, 2500);
     });
+    return () => {
+      off();
+      if (toastTimerRef.current != null) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
     // QA11/SDK-6: dep is now `voice.supported` only (a
     // boolean, stable across renders) instead of the full
     // `voice` object. The previous version re-subscribed

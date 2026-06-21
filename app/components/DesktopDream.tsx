@@ -42,6 +42,17 @@ import { setDirectorState } from "../lib/director-state";
 export function DesktopDream() {
   const { uploadFile, setImage, setPrompt, start, reset } = useLingbot();
   const sessions = useSessions();
+  // Round-4 product feature: "Pin live scene" — star the *current*
+  // scene directly from the dream view. The favorite flag already
+  // exists on Scene; the sidebar can filter to favorites. Until this
+  // button landed, there was no way to favorite the live frame
+  // without opening the sidebar — so the most interesting scenes
+  // (the ones the user is actively looking at) were effectively
+  // uncategorisable.
+  const currentScene = sessions.activeSession
+    ? sessions.activeSession.scenes[sessions.activeSession.scenes.length - 1]
+    : null;
+  const currentSceneIsFav = currentScene?.favorite === true;
   const voice = useVoice();
   const [snapshot, setSnapshot] = useState<LingbotStateMessage | null>(null);
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
@@ -742,6 +753,33 @@ export function DesktopDream() {
         </button>
         <button
           type="button"
+          onClick={() => {
+            if (currentScene) sessions.toggleFavorite(currentScene.id);
+          }}
+          disabled={!currentScene}
+          aria-label={
+            currentSceneIsFav
+              ? "Unstar the current scene"
+              : "Star the current scene — appears in your favorites filter"
+          }
+          aria-pressed={currentSceneIsFav}
+          title={
+            currentSceneIsFav
+              ? "Unstar current scene"
+              : "Star current scene"
+          }
+          data-testid="desktop-fav-btn"
+          className={[
+            "grid h-12 w-12 shrink-0 place-items-center rounded-full border text-base transition",
+            currentSceneIsFav
+              ? "border-rose-400/60 bg-rose-500/30 text-white"
+              : "border-white/10 bg-white/10 text-white/85 hover:bg-white/20 disabled:opacity-40",
+          ].join(" ")}
+        >
+          {currentSceneIsFav ? "★" : "☆"}
+        </button>
+        <button
+          type="button"
           onClick={onShare}
           disabled={!lastPrompt}
           aria-label={copied ? "Link copied" : "Copy a shareable link to this dream"}
@@ -791,6 +829,24 @@ export function DesktopDream() {
               }
             }}
             onTouchEnd={() => {
+              pushToTalkRef.current = false;
+              try {
+                voice.commit();
+                voice.stop();
+              } catch {
+                // ignore
+              }
+            }}
+            onTouchCancel={() => {
+              // QA17: a phone call, notification, or
+              // browser gesture-cancel mid-tap cancels the
+              // touch without firing onTouchEnd. Without
+              // this handler pushToTalkRef stays true and
+              // voice.stop() never runs — the mic stays
+              // hot, the recogniser keeps listening, and
+              // the next touch sees pushToTalkRef already
+              // true and bails at the early `if
+              // (!pushToTalkRef.current) return;` guard.
               pushToTalkRef.current = false;
               try {
                 voice.commit();

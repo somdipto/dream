@@ -262,17 +262,20 @@ export function restoreCorruptBackup(): { sessions: Session[] } | null {
   }
   if (keys.length === 0) return null;
   // Sort newest first. Key format is
-  //   `${CORRUPT_BACKUP_KEY}.<timestampMs>.<randomSuffix>` —
-  // segment [1] is the timestamp, segment [2] is the random
-  // suffix used for collision avoidance. The previous code
-  // sorted by `.pop()` (the random suffix), which meant the
-  // newest corrupt journal was NOT necessarily the first one
-  // restored. Restore order now matches creation order.
-  keys.sort((a, b) => {
-    const ta = Number(a.split(".")[1] ?? 0);
-    const tb = Number(b.split(".")[1] ?? 0);
-    return tb - ta;
-  });
+  //   `${CORRUPT_BACKUP_KEY}.v1.<timestampMs>.<randomSuffix>` —
+  // segment [3] is the timestamp (ms since epoch), segment [4]
+  // is the random suffix used for collision avoidance. The
+  // previous code sorted by `.split('.')[1]` — which is the
+  // literal string "corruptBackup" — so Number() returned NaN
+  // and the sort was effectively a no-op. The newest corrupt
+  // journal was NOT necessarily the first one restored. Restore
+  // order now matches creation order, newest first.
+  const tsOf = (k: string): number => {
+    const seg = k.split(".")[3];
+    const n = seg ? Number(seg) : 0;
+    return Number.isFinite(n) ? n : 0;
+  };
+  keys.sort((a, b) => tsOf(b) - tsOf(a));
   for (const k of keys) {
     let raw: string | null = null;
     try {

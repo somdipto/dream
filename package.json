@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "test": "tsc --target es2022 --module nodenext --moduleResolution nodenext --skipLibCheck --outDir tests/.build tests/qa16-regressions.test.ts app/lib/scene-composer.ts app/lib/event-bus.ts app/lib/voice-style-parser.ts app/lib/style-presets.ts app/lib/reactor-errors.ts app/lib/session-store.ts app/lib/last-image.ts app/hooks/useMotionFlicks.ts && node --test tests/.build/tests/qa16-regressions.test.js",
+    "test:qa17": "tsc --target es2022 --module nodenext --moduleResolution nodenext --skipLibCheck --outDir tests/.build-qa17 tests/qa17-regressions.test.ts app/lib/scene-composer.ts app/lib/event-bus.ts app/lib/voice-style-parser.ts app/lib/style-presets.ts app/lib/reactor-errors.ts app/lib/session-store.ts app/lib/last-image.ts app/hooks/useMotionFlicks.ts && node --test tests/.build-qa17/tests/qa17-regressions.test.js",
     "start": "next start"
   },
   "dependencies": {

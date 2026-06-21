@@ -1030,6 +1030,23 @@ function DreamSurface() {
   // parallel teardowns. Whichever loses the race is a
   // no-op.
   const resetInflightRef = useRef<Promise<void> | null>(null);
+  // QA17: pending chip → loadScene emit (see PromptHistoryChips
+  // onPick below). Cleared on Reset and on unmount so a
+  // reset-then-tap-fast sequence can't load a stale scene
+  // after teardown.
+  const chipEmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // QA17: clear the chip emit timer on unmount so HMR /
+  // route change can't fire a stale loadScene. The
+  // handleReset path also clears it inline; this is the
+  // mount/unmount symmetry that was missing.
+  useEffect(() => {
+    return () => {
+      if (chipEmitTimerRef.current != null) {
+        clearTimeout(chipEmitTimerRef.current);
+        chipEmitTimerRef.current = null;
+      }
+    };
+  }, []);
   // QA16: de-duplicate rapid Begin taps. iOS Safari can
   // double-fire a click after the first paint of the overlay,
   // especially when the user double-taps. Without this, two
@@ -1045,6 +1062,14 @@ function DreamSurface() {
     // active mic to the next voice.start() and produce a
     // `NotAllowedError` (audit bug #17).
     if (resetInflightRef.current) return;
+    // QA17: cancel any pending chip → loadScene emit so a
+    // fast Reset (chip tap → Reset within 200ms) doesn't
+    // resurrect the just-torn-down world. See
+    // chipEmitTimerRef declaration.
+    if (chipEmitTimerRef.current != null) {
+      clearTimeout(chipEmitTimerRef.current);
+      chipEmitTimerRef.current = null;
+    }
     const teardown = async () => {
       try {
         if (platform.isMobile) {
@@ -1416,7 +1441,20 @@ function DreamSurface() {
               // first chip tap on the Begin overlay emits to
               // zero listeners and the world stays black.
               // 200ms matches the daily-dream path below.
-              setTimeout(() => {
+              //
+              // QA17: track the timer in a ref so Reset can
+              // cancel it. Previously, tapping a chip then
+              // hitting Reset within 200ms left the emit
+              // pending — it fired after Reset tore down,
+              // the dormant VoiceDream/DesktopDream mounted
+              // listener woke up, and the world reloaded
+              // the chip prompt without any user input.
+              // handleReset() now clears chipEmitTimerRef.
+              if (chipEmitTimerRef.current != null) {
+                clearTimeout(chipEmitTimerRef.current);
+              }
+              chipEmitTimerRef.current = setTimeout(() => {
+                chipEmitTimerRef.current = null;
                 dreamBus.emit("dream:loadScene", { prompt, seed });
               }, 200);
             }}

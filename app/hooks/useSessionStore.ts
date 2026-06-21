@@ -57,7 +57,30 @@ export interface UseSessionStore {
 // a component is a developer error.
 
 export function useSessionStoreImpl(): UseSessionStore {
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessions, _setSessionsRaw] = useState<Session[]>([]);
+  // QA17: every write to `sessions` goes through this wrapper so
+  // that `sessionsRef.current` stays in lock-step with the React
+  // state. The previous design mirrored `sessions → sessionsRef`
+  // in a `useEffect` post-commit, which lagged by one render —
+  // long enough that a same-tick `setActive(staleId)` would pass
+  // the existence check (line 481) against the still-unculled ref
+  // and orphan the active pointer. By updating the ref inside
+  // the setter (BEFORE the next render) we keep every consumer
+  // that reads `sessionsRef.current` honest about the current
+  // session list.
+  const setSessions = useCallback(
+    (next: React.SetStateAction<Session[]>) => {
+      _setSessionsRaw((prev) => {
+        const resolved =
+          typeof next === "function"
+            ? (next as (p: Session[]) => Session[])(prev)
+            : next;
+        sessionsRef.current = resolved;
+        return resolved;
+      });
+    },
+    [],
+  );
   const [activeId, setActiveId] = useState<string | null>(null);
   const [pruneNotice, setPruneNotice] = useState(0);
   const [hydrated, setHydrated] = useState(false);
@@ -66,10 +89,12 @@ export function useSessionStoreImpl(): UseSessionStore {
   // (notably setActive's id validation). Avoids the need to thread
   // `sessions` into the dep array, which would change the callback
   // identity every state update and force every consumer to re-run.
+  //
+  // QA17: now kept in lock-step with React state by the setSessions
+  // wrapper above (synchronously, inside the updater). The previous
+  // useEffect-based mirror lagged by one render and was the root
+  // cause of the same-tick setActive(staleId) orphan bug.
   const sessionsRef = useRef<Session[]>([]);
-  useEffect(() => {
-    sessionsRef.current = sessions;
-  }, [sessions]);
 
   // QA16: mirror activeId into a ref so updaters inside
   // setSessions can read the LATEST activeId even when called
@@ -369,6 +394,16 @@ export function useSessionStoreImpl(): UseSessionStore {
     // here from sessionsRef.current — a plain ref read, no
     // React magic — and dispatch the two setStates as sibling
     // calls outside the updater.
+    //
+    // QA17: also keep `sessionsRef.current` in lock-step with
+    // the React state. The `setActive` callback (line 451
+    // below) validates incoming ids against sessionsRef so
+    // that a caller passing a stale id (e.g. a session that
+    // was deleted in the same tick) cannot accidentally
+    // re-root the journal to a non-existent session. Without
+    // this synchronous update, sessionsRef lags by one render
+    // and the validation passes against the deleted id,
+    // orphaning the active pointer on the next commit.
     const remaining = sessionsRef.current.filter((s) => s.id !== sessionId);
     setSessions(remaining);
     const curr = sessionsRef.current.find((s) => s.id === sessionId) ? sessionId : null;

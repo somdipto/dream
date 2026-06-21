@@ -109,6 +109,10 @@ export function useVoice(): VoiceControls {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const levelRafRef = useRef<number | null>(null);
+  // QA17: re-entry guard for startLevelMeter. Set synchronously
+  // BEFORE the getUserMedia await; cleared in `finally`. See the
+  // startLevelMeter comment for the race this prevents.
+  const meterPendingRef = useRef(false);
 
   const flushSilence = useCallback(() => {
     if (silenceTimerRef.current) {
@@ -149,6 +153,17 @@ export function useVoice(): VoiceControls {
   const startLevelMeter = useCallback(async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
     if (streamRef.current) return; // already running
+    // QA17: synchronous re-entry guard. Two rapid `start()` calls
+    // (e.g. a user double-tap on the mic button) used to both
+    // pass the `streamRef.current === null` check above and
+    // both `await getUserMedia()`. The first one to resolve
+    // assigned its stream; the second overwrote `streamRef` —
+    // stopLevelMeter() then stopped the SECOND stream's tracks
+    // and the FIRST stream leaked (mic indicator stayed lit,
+    // AudioContext #1 leaked). Set a flag BEFORE the await so
+    // the second caller bails synchronously.
+    if (meterPendingRef.current) return;
+    meterPendingRef.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -190,6 +205,12 @@ export function useVoice(): VoiceControls {
     } catch {
       // No-op: level meter is non-critical. The user still
       // gets the speech-to-text pipeline.
+    } finally {
+      // Always clear the pending flag so a future start() can
+      // proceed even if getUserMedia or AudioContext construction
+      // threw. The flag guards re-entry; it does not imply
+      // success.
+      meterPendingRef.current = false;
     }
   }, []);
 
@@ -341,11 +362,23 @@ export function useVoice(): VoiceControls {
       // blocks the speech pipeline.
       void startLevelMeter();
     } catch (e: any) {
+      // QA17: if rec.start() throws (e.g. NotAllowedError
+      // mid-session, "already started" on a sloppy browser,
+      // or a hot-reload race in dev), the level meter that
+      // was just kicked off is still running — its getUserMedia
+      // stream and AudioContext are live and the OS mic
+      // indicator stays lit. Tear it down here so the failure
+      // path doesn't leak the mic.
+      try {
+        stopLevelMeter();
+      } catch {
+        // idempotent — ignore
+      }
       setError(e?.message ?? String(e));
       shouldListenRef.current = false;
       setListening(false);
     }
-  }, [supported, armSilenceFlush, commitBufferAsFinal, startLevelMeter]);
+  }, [supported, armSilenceFlush, commitBufferAsFinal, startLevelMeter, stopLevelMeter]);
 
   // stop() resolves once the recogniser has actually finished
   // tearing down. We wait for `onend` (some browsers fire it
