@@ -71,7 +71,21 @@ export function classifyReactorError(message: string | null | undefined): Classi
   if (m.includes("credits_depleted") || m.includes("credits have been depleted")) {
     return { ...KNOWN.credits_depleted };
   }
-  if (m.includes("rate limit") || m.includes("429") || m.includes("too many requests")) {
+  if (
+    m.includes("rate limit") ||
+    m.includes("too many requests") ||
+    // QA16: was `m.includes("429")` — matched the substring anywhere
+    // (a $429 charge, a 1429-line error). Word boundary alone is
+    // not enough because `$429.00` has a boundary between `$` and
+    // `4` and between `9` and `.` — the literal "429" still matches.
+    // Match the canonical HTTP status-code prefixes that the SDK /
+    // fetch layer actually emit: "429 too many requests",
+    // "status: 429", "http 429", "code 429", etc. Plain "429" alone
+    // (e.g. a billing line) doesn't carry the standard prefix and
+    // should NOT route to rate-limited.
+    /\b(?:http|status|code)\s*[:=]?\s*429\b/.test(m) ||
+    /\b429\s+too many requests\b/.test(m)
+  ) {
     return { ...KNOWN.rate_limited };
   }
   if (m.includes("failed to fetch") || m.includes("networkerror") || m.includes("econn")) {
@@ -86,10 +100,25 @@ export function classifyReactorError(message: string | null | undefined): Classi
   if (m.includes("all api keys are temporarily exhausted") || m.includes("all api keys failed")) {
     return { ...KNOWN.service_unavailable };
   }
-  if (m.includes("401") || m.includes("unauthorized") || m.includes("api key")) {
+  // QA16: same canonical-prefix fix — `m.includes("401")` matched
+  // the substring anywhere (a 401-line message, a $401 invoice).
+  // Match the canonical HTTP status-code prefixes that the SDK /
+  // fetch layer actually emit. We still keep the "unauthorized"
+  // / "api key" substring checks because the server message body
+  // uses those phrases naturally (and they are unambiguous in
+  // the context of a Reactor error string).
+  if (
+    /\b(?:http|status|code)\s*[:=]?\s*401\b/.test(m) ||
+    m.includes("unauthorized") ||
+    m.includes("api key")
+  ) {
     return { ...KNOWN.auth };
   }
-  if (m.includes("503") || m.includes("service unavailable") || m.includes("temporarily unavailable")) {
+  if (
+    /\b(?:http|status|code)\s*[:=]?\s*503\b/.test(m) ||
+    m.includes("service unavailable") ||
+    m.includes("temporarily unavailable")
+  ) {
     return { ...KNOWN.service_unavailable };
   }
   return {

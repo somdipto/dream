@@ -8,8 +8,7 @@
 
 // localStorage polyfill — byok.ts is a browser-only module.
 const _ls: Record<string, string> = {};
-(globalThis as unknown as { window: unknown; localStorage: Record<string, string> }).window = globalThis;
-(globalThis as unknown as { localStorage: Record<string, string> }).localStorage = {
+const fakeStorage = {
   getItem: (k: string) => _ls[k] ?? null,
   setItem: (k: string, v: string) => {
     _ls[k] = v;
@@ -20,9 +19,15 @@ const _ls: Record<string, string> = {};
   clear: () => {
     for (const k of Object.keys(_ls)) delete _ls[k];
   },
-  key: () => null,
-  length: 0,
+  key: () => null as string | null,
 };
+Object.defineProperty(fakeStorage, "length", {
+  get() {
+    return Object.keys(_ls).length;
+  },
+});
+(globalThis as unknown as { window: unknown }).window = globalThis;
+(globalThis as unknown as { localStorage: typeof fakeStorage }).localStorage = fakeStorage;
 
 import {
   classifyReactorError,

@@ -24,6 +24,7 @@ import {
 } from "../lib/style-presets";
 import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
 import { dreamBus } from "../lib/event-bus";
+import { _takePendingDailyScene } from "../LingbotApp";
 import { recordBlackScreen } from "../lib/black-screen-log";
 import { parseVoiceStyle } from "../lib/voice-style-parser";
 import { captureCurrentFrame } from "../lib/pose-lock";
@@ -62,6 +63,12 @@ export function VoiceDream() {
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
   const [lastSeed, setLastSeed] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // QA16/A11Y-1: live-region text for screen readers. Updated
+  // on the dreamBus paint events so a blind user gets "Painting
+  // started for 'a sunlit beach'…" / "…finished in 2.3 seconds"
+  // / "…failed, your prompt is saved" without the announcements
+  // clobbering the visible mic status line.
+  const [paintingAnnouncement, setPaintingAnnouncement] = useState("");
   const [pulse, setPulse] = useState(0); // increments on every send → animates "live" indicator
   const [muted, setMuted] = useState(false);
   const [styleId, setStyleId] = useState<string | null>(null);
@@ -476,6 +483,27 @@ export function VoiceDream() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // QA16: drain the Begin-tap Daily Dream slot. Replaces the
+  // 200ms setTimeout in LingbotApp.handleBegin — even if the
+  // Begin-tap emit fired before this listener was attached,
+  // the slot keeps the scene around for the Dream surface to
+  // pick up. We re-emit through the same bus so the regular
+  // listener path runs the paint, including the abort /
+  // epoch / scene-add logic.
+  useEffect(() => {
+    const slot = _takePendingDailyScene();
+    if (slot) {
+      // Defer one tick so the abort listener above has
+      // subscribed; the loadScene listener is at line 464, so
+      // by next macrotask it's bound. Even on a slow phone
+      // this is enough.
+      const t = setTimeout(() => {
+        dreamBus.emit("dream:loadScene", slot);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
   // Cooperative-abort: any caller about to switch the active session
   // (sidebar pick, curated gallery tap) fires this first so the
   // in-flight `paintDream` short-circuits before it would call
@@ -532,6 +560,36 @@ export function VoiceDream() {
         repaintTimerRef.current = null;
       }
     };
+  }, []);
+
+  // QA16/A11Y-1: screen-reader live-region bridge. Listen to
+  // the paint lifecycle events and translate them into short
+  // announcements. We key off `pulse` (which ticks on every
+  // send) for "Painting started" and dream:paintDone for the
+  // outcome. The strings are short on purpose — screen
+  // readers interrupt each other, so a 4-word update reads
+  // better than a 14-word one. Clear the message after 4s
+  // so identical re-paints don't spam the live region with
+  // stale text.
+  useEffect(() => {
+    if (pulse === 0) return;
+    setPaintingAnnouncement("Painting started.");
+    const t = setTimeout(() => setPaintingAnnouncement(""), 4000);
+    return () => clearTimeout(t);
+  }, [pulse]);
+  useEffect(() => {
+    return dreamBus.on("dream:paintDone", (detail: { ms: number; ok: boolean }) => {
+      if (detail.ok) {
+        const seconds = (detail.ms / 1000).toFixed(1);
+        setPaintingAnnouncement(`Paint finished in ${seconds} seconds.`);
+      } else {
+        setPaintingAnnouncement("Paint failed. Your prompt is saved — try again.");
+      }
+      const t = setTimeout(() => setPaintingAnnouncement(""), 4000);
+      // Best-effort cleanup; since this is a bus listener the
+      // bus owns the unsubscribe — we only own the timer.
+      return () => clearTimeout(t);
+    });
   }, []);
 
   // Re-render the most recent prompt with a fresh seed. Same text,
@@ -785,6 +843,22 @@ export function VoiceDream() {
                     : "Tap to speak"}
           </p>
         </div>
+
+      {/* QA16/A11Y-1: hidden live region for screen readers so
+          paint starts/finishes/errors get announced without
+          stealing focus or clobbering the visible mic
+          status line above. Visually hidden, semantically
+          present. Announces on state transition only —
+          the message is keyed by a tiny useEffect that
+          touches `paintingAnnouncement` on each transition. */}
+      <p
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {paintingAnnouncement}
+      </p>
       </div>
 
       <form onSubmit={onTextSubmit} className="flex gap-2">

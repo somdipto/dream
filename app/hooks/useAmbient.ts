@@ -33,12 +33,24 @@ export interface UseAmbientApi {
 
 export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseAmbientApi {
   const [isOn, setIsOn] = useState(false);
+  // Mirror of isOn so toggle() can read the freshest value
+  // without depending on `isOn` (which would force the
+  // toggle handler to re-bind every state flip).
+  const isOnRef = useRef(false);
   const ctxRef = useRef<AudioContext | null>(null);
   const masterRef = useRef<GainNode | null>(null);
   const filterRef = useRef<BiquadFilterNode | null>(null);
   const noiseRef = useRef<AudioBufferSourceNode | null>(null);
   const lfoRef = useRef<OscillatorNode | null>(null);
   const lfoGainRef = useRef<GainNode | null>(null);
+  // The setTimeout that `off()` schedules to call
+  // `ctx.suspend()` 350ms after the gain ramp. Tracked so
+  // we can cancel it on `on()` (otherwise an `on()` that
+  // follows `off()` within 350ms gets silently muted when
+  // the deferred suspend lands) and on `teardown()` (the
+  // context is already closed; suspend would throw
+  // `InvalidStateError` on a closed AudioContext).
+  const suspendTimerRef = useRef<number | null>(null);
   // Latest patch the user has asked for. Applied on the next
   // ~250ms tick (we don't want to snap-cut; we crossfade
   // gain at the master and ramp filter frequency).
@@ -115,10 +127,17 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
   useEffect(() => {
     const ctx = ctxRef.current;
     if (!ctx) return;
+    // QA16: a teardown() that ran earlier in the same render
+    // could have nulled ctxRef.current while the paused
+    // effect was already queued. The captured `ctx` is the
+    // stale (closed) context, and `suspend()` on a closed
+    // AudioContext throws `InvalidStateError` — unhandled
+    // and noisy in the console. Guard on the live state.
+    if (ctx.state === "closed") return;
     if (paused) {
-      void ctx.suspend();
+      try { void ctx.suspend(); } catch { /* closed mid-flight */ }
     } else {
-      void ctx.resume();
+      try { void ctx.resume(); } catch { /* closed mid-flight */ }
     }
   }, [paused]);
 
@@ -128,6 +147,19 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
       teardown();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // QA16: if the parent unmounts while a suspend timer is
+  // pending, clear it. teardown() already does this, but
+  // we add a dedicated effect so the cleanup is explicit
+  // and React's strict-mode double-mount is covered.
+  useEffect(() => {
+    return () => {
+      if (suspendTimerRef.current != null) {
+        window.clearTimeout(suspendTimerRef.current);
+        suspendTimerRef.current = null;
+      }
+    };
   }, []);
 
   function ensureContext(): AudioContext | null {
@@ -171,6 +203,13 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
   }
 
   function teardown() {
+    // QA16: cancel any pending suspend timer so a teardown
+    // followed by an `on()` doesn't have a stale timer fire
+    // against the new context.
+    if (suspendTimerRef.current != null) {
+      window.clearTimeout(suspendTimerRef.current);
+      suspendTimerRef.current = null;
+    }
     try { noiseRef.current?.stop(); } catch { /* noop */ }
     try { lfoRef.current?.stop(); } catch { /* noop */ }
     try { ctxRef.current?.close(); } catch { /* noop */ }
@@ -183,9 +222,17 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
   }
 
   const on = useCallback(() => {
+    // QA16: cancel the deferred suspend from a recent
+    // `off()` so the audio doesn't go silent 350ms after
+    // the user re-enabled it.
+    if (suspendTimerRef.current != null) {
+      window.clearTimeout(suspendTimerRef.current);
+      suspendTimerRef.current = null;
+    }
     const ctx = ensureContext();
     if (!ctx) return;
-    void ctx.resume();
+    if (ctx.state === "closed") return;
+    try { void ctx.resume(); } catch { /* closed mid-flight */ }
     const master = masterRef.current;
     if (master) {
       const t = ctx.currentTime;
@@ -193,13 +240,15 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
       master.gain.setValueAtTime(master.gain.value, t);
       master.gain.linearRampToValueAtTime(pendingPatchRef.current.gain, t + 0.6);
     }
+    isOnRef.current = true;
     setIsOn(true);
   }, []);
 
   const off = useCallback(() => {
     const ctx = ctxRef.current;
     const master = masterRef.current;
-    if (!ctx || !master) {
+    if (!ctx || !master || ctx.state === "closed") {
+      isOnRef.current = false;
       setIsOn(false);
       return;
     }
@@ -208,17 +257,26 @@ export function useAmbient({ enabled, paused = false }: UseAmbientOptions): UseA
     master.gain.setValueAtTime(master.gain.value, t);
     master.gain.linearRampToValueAtTime(0, t + 0.3);
     // Schedule the context suspend after the ramp so the
-    // audio doesn't click.
-    setTimeout(() => {
-      void ctx.suspend();
+    // audio doesn't click. Track the timer so `on()` and
+    // `teardown()` can cancel it before it fires against a
+    // suspended or closed context.
+    suspendTimerRef.current = window.setTimeout(() => {
+      suspendTimerRef.current = null;
+      const live = ctxRef.current;
+      if (!live || live.state === "closed") return;
+      try { void live.suspend(); } catch { /* closed mid-flight */ }
     }, 350);
+    isOnRef.current = false;
     setIsOn(false);
   }, []);
 
   const toggle = useCallback(() => {
-    if (isOn) off();
+    // QA16: read isOn from a ref so a rapid double-tap
+    // (faster than the React re-render) doesn't see the
+    // same isOn value twice and call on() twice in a row.
+    if (isOnRef.current) off();
     else on();
-  }, [isOn, on, off]);
+  }, [on, off]);
 
   // Don't render audio unless the user enabled it.
   if (!enabled) {

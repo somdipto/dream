@@ -24,6 +24,7 @@ import {
 } from "../lib/style-presets";
 import { buildShareUrl, hashSeed, readDreamFromUrl, clearDreamFromUrl } from "../lib/dream-utils";
 import { dreamBus } from "../lib/event-bus";
+import { _takePendingDailyScene } from "../LingbotApp";
 import { parseVoiceStyle } from "../lib/voice-style-parser";
 import { captureCurrentFrame } from "../lib/pose-lock";
 import { pickSurprisePrompt } from "../lib/surprise-prompts";
@@ -55,6 +56,10 @@ export function DesktopDream() {
   // current frame as the seed image instead of a fresh noise gradient.
   const [poseLocked, setPoseLocked] = useState(false);
   const [poseLockedAt, setPoseLockedAt] = useState<number>(0);
+  // QA16/A11Y-1: live-region text for screen readers. See
+  // VoiceDream for the matching effect — both surfaces need
+  // this so the desktop path is just as accessible.
+  const [paintingAnnouncement, setPaintingAnnouncement] = useState("");
 
   const inFlightRef = useRef(false);
   const queuedRef = useRef<string | null>(null);
@@ -358,6 +363,20 @@ export function DesktopDream() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // QA16: drain the Begin-tap Daily Dream slot (see
+  // VoiceDream.tsx for the matching logic). Only one of the
+  // two Dream surfaces should ever mount at a time, but
+  // belt-and-braces: both drain, both null it out.
+  useEffect(() => {
+    const slot = _takePendingDailyScene();
+    if (slot) {
+      const t = setTimeout(() => {
+        dreamBus.emit("dream:loadScene", slot);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
   // Cooperative-abort: any caller about to switch the active session
   // (sidebar pick, curated gallery tap) fires this first so the
   // in-flight `paintDream` short-circuits before it would call
@@ -409,6 +428,24 @@ export function DesktopDream() {
         repaintTimerRef.current = null;
       }
     };
+  }, []);
+
+  // QA16/A11Y-1: paint lifecycle announcements. Mirrors
+  // VoiceDream's effect — desktop's `pulse` is the same
+  // increment-on-send signal, dreamBus:paintDone is the
+  // same outcome channel. Keep the strings short so screen
+  // readers don't queue-spam.
+  useEffect(() => {
+    return dreamBus.on("dream:paintDone", (detail: { ms: number; ok: boolean }) => {
+      if (detail.ok) {
+        const seconds = (detail.ms / 1000).toFixed(1);
+        setPaintingAnnouncement(`Paint finished in ${seconds} seconds.`);
+      } else {
+        setPaintingAnnouncement("Paint failed. Your prompt is saved — try again.");
+      }
+      const t = setTimeout(() => setPaintingAnnouncement(""), 4000);
+      return () => clearTimeout(t);
+    });
   }, []);
 
   // Desktop voice: push-to-talk via spacebar OR the mic button. Same
@@ -584,6 +621,13 @@ export function DesktopDream() {
         </p>
         {error && <p className="mt-1 text-xs text-red-300" role="status" aria-live="polite">{error}</p>}
       </div>
+
+      {/* QA16/A11Y-1: visually-hidden live region for paint
+          events. Screen readers announce the new text on each
+          transition; sighted users see nothing change. */}
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {paintingAnnouncement}
+      </p>
 
       <div className="flex flex-col gap-2">
         <ChipStrip

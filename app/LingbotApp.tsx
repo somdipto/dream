@@ -77,6 +77,19 @@ async function fetchToken(): Promise<string> {
 const DEFAULT_DESKTOP_PROMPT =
   "a sunlit alpine meadow at golden hour, soft warm sunlight from the upper left, vivid wildflowers in the foreground, distant snow-capped peaks, clear blue sky with soft cumulus clouds, butterflies, hyper-realistic, cinematic lighting";
 
+// QA16: a tiny module-level handoff so the Begin tap's Daily
+// Dream seed is delivered to the Dream surface even when its
+// event-bus listener is still mounting. LingbotApp fills the
+// slot from handleBegin; VoiceDream/DesktopDream drain it on
+// their first render. The slot is single-use: drained on
+// first read so a slow mount doesn't replay a stale seed.
+let pendingDailyScene: { prompt: string; seed: number } | null = null;
+export function _takePendingDailyScene() {
+  const v = pendingDailyScene;
+  pendingDailyScene = null;
+  return v;
+}
+
 export function LingbotApp() {
   return (
     <SessionProvider>
@@ -908,6 +921,16 @@ function DreamSurface() {
   }, [hasBegun]);
 
   const handleBegin = useCallback(async () => {
+    // QA16: drop the second tap of a double-tap. Clear the
+    // gate on the *next* macrotask so a user who genuinely
+    // tapped twice (one Begin, one "did it work?") gets
+    // through eventually — but a single double-fire from
+    // iOS Safari doesn't burn a second connect.
+    if (beginInflightRef.current) return;
+    beginInflightRef.current = true;
+    setTimeout(() => {
+      beginInflightRef.current = false;
+    }, 500);
     if (platform.isMobile) {
       // QA6: AWAIT the iOS motion permission prompt.
       // Previously `void motion.requestPermission()` ran
@@ -959,18 +982,23 @@ function DreamSurface() {
     if (sessions.hydrated && sessions.sessions.length === 0) {
       if (typeof window !== "undefined" && !window.location.search.includes("d=")) {
         const dream = dailyDream();
-        // Defer one tick so the Dream component has time to mount
-        // its event-bus listener.
-        setTimeout(() => {
-          // Create a daily-dream session so the user's journal
-          // starts with something to revisit.
-          const id = sessions.createSession({
-            title: dailyDreamTitle(),
-            seed: { prompt: dream.prompt, seed: dream.seed },
-          });
-          void id;
-          dreamBus.emit("dream:loadScene", { prompt: dream.prompt, seed: dream.seed });
-        }, 200);
+        // QA16: store the pending scene in a module-level slot
+        // the Dream surface will drain on mount. This replaces
+        // the 200ms setTimeout hack, which dropped the emit on
+        // slow phones where the listener took >200ms to attach.
+        // The slot is shared between LingbotApp (which fills it
+        // from the Begin tap) and VoiceDream/DesktopDream
+        // (which drain it on first render).
+        const id = sessions.createSession({
+          title: dailyDreamTitle(),
+          seed: { prompt: dream.prompt, seed: dream.seed },
+        });
+        void id;
+        pendingDailyScene = { prompt: dream.prompt, seed: dream.seed };
+        // Fire now too — if the listener is already attached,
+        // great. If not, the Dream surface will drain the slot
+        // on mount and re-emit.
+        dreamBus.emit("dream:loadScene", { prompt: dream.prompt, seed: dream.seed });
       }
     }
     // Depend on stable primitives only. `motion` and `voice` are objects
@@ -996,6 +1024,14 @@ function DreamSurface() {
   // parallel teardowns. Whichever loses the race is a
   // no-op.
   const resetInflightRef = useRef<Promise<void> | null>(null);
+  // QA16: de-duplicate rapid Begin taps. iOS Safari can
+  // double-fire a click after the first paint of the overlay,
+  // especially when the user double-taps. Without this, two
+  // connect() calls race each other — the second call enters
+  // while the SDK is already mid-connect, drops us into an
+  // undefined ready state, and the user sees the Begin overlay
+  // stuck even though hasBegun is true.
+  const beginInflightRef = useRef(false);
   const handleReset = useCallback(() => {
     // Order matters: await the voice teardown BEFORE disconnect so
     // the SDK teardown doesn't race the recogniser's audio handle.
@@ -1038,6 +1074,13 @@ function DreamSurface() {
   // We now only clear the ref on success (status → ready) or on
   // explicit hasBegun change.
   const reconnectingRef = useRef(false);
+  // QA16: cap total retries across a session to 2 — once on
+  // the first disconnect, once on a second. After that, the
+  // user must hit Begin again. Without this, a flaky network
+  // cycles disconnected → connecting → disconnected forever
+  // and burns Reactor credits on each cycle. Reset to 0 on
+  // a successful ready transition.
+  const retryCountRef = useRef(0);
   // QA15 fix: surface a visible "Reconnecting…" pill so the user
   // can tell the app is doing something instead of appearing to
   // hang. Boolean so the overlay can show a spinner next to the
@@ -1047,6 +1090,7 @@ function DreamSurface() {
     if (status === "ready") {
       // Successful transition — allow a future disconnect to retry.
       reconnectingRef.current = false;
+      retryCountRef.current = 0;
       setAutoRetrying(false);
       return;
     }
@@ -1071,11 +1115,23 @@ function DreamSurface() {
       return;
     }
     if (reconnectingRef.current) return;
+    // QA16: hard cap. We also bail if lastError flipped to a
+    // non-error message in the meantime (e.g. SDK transient
+    // state update cancelled the retry mid-flight).
+    if (retryCountRef.current >= 2) {
+      setAutoRetrying(false);
+      return;
+    }
     reconnectingRef.current = true;
+    retryCountRef.current += 1;
     setAutoRetrying(true);
+    // QA16: exponential backoff with jitter — 1.5s, 3s, then
+    // bail. The cap above stops the third attempt.
+    const delay = 1500 * 2 ** (retryCountRef.current - 1);
+    const jitter = Math.floor(Math.random() * 250);
     const t = setTimeout(() => {
       void connect();
-    }, 1500);
+    }, delay + jitter);
     return () => {
       clearTimeout(t);
       // Don't clear `autoRetrying` here — the effect's cleanup
@@ -1100,30 +1156,59 @@ function DreamSurface() {
   // so the user surfaces "Try a different key" on a single
   // uninterrupted 8s of stuck-ness, regardless of how many
   // SDK transitions happen inside that window.
+  //
+  // QA16 fix: the QA15 fix had its own bug — the cleanup
+  // branch (status reaching "ready" or user backing out) was
+  // the ONLY place that nulled connectingSinceRef. But the
+  // re-entry branch at the top of the effect was guarded by
+  // `connectingSinceRef.current === null`, so once the timer
+  // fired and the effect re-ran (because status changed), the
+  // new run would not see null and would re-use the SAME
+  // ref, which is correct — except that the previous run's
+  // cleanup ALSO touched the ref in the "successful" path,
+  // racing the new run. The observed bug: a slow SDK that
+  // does disconnected → connecting → disconnected →
+  // connecting resets the 8s clock on each disconnected
+  // (because the "no progress" reset path was looking at
+  // `status !== isConnectingLike` and that branch was
+  // unreachable from the effect itself). The fix is to
+  // only reset on terminal outcomes, and let the
+  // connectingSinceRef persist across re-runs.
   const connectingSinceRef = useRef<number | null>(null);
   const [stuck, setStuck] = useState(false);
   useEffect(() => {
+    // First — terminal outcomes clear the clock.
+    if (status === "ready" || !hasBegun) {
+      connectingSinceRef.current = null;
+      setStuck(false);
+      return;
+    }
     const isConnectingLike =
       status === "connecting" || status === "waiting" || status === "disconnected";
-    if (isConnectingLike && hasBegun) {
-      if (connectingSinceRef.current === null) {
-        connectingSinceRef.current = Date.now();
-      }
-      const start = connectingSinceRef.current;
-      const t = setTimeout(() => {
-        // Only trip if we're still in a connecting-like state
-        // AND the deadline has actually elapsed (in case the
-        // status flipped multiple times before this fires).
-        if (connectingSinceRef.current === start) {
-          setStuck(true);
-        }
-      }, 8000);
-      return () => clearTimeout(t);
+    if (!isConnectingLike) {
+      // Some other state (e.g. "error") — don't trip the
+      // stuck detector, the error pill is doing that work.
+      // But also don't reset the clock, because the SDK
+      // may soon return to "connecting" and the 8s window
+      // should keep ticking from the original disconnect.
+      return;
     }
-    // Successful connection or user backed out — clear stuck flag.
-    connectingSinceRef.current = null;
-    setStuck(false);
-    return;
+    // Start the clock the first time we enter a
+    // connecting-like state, then keep using the same
+    // deadline across re-runs.
+    if (connectingSinceRef.current === null) {
+      connectingSinceRef.current = Date.now();
+    }
+    const start = connectingSinceRef.current;
+    const t = setTimeout(() => {
+      // Only trip if the ref is still pointing at the same
+      // start instant (i.e. we haven't been cleared by a
+      // terminal outcome in the meantime).
+      if (connectingSinceRef.current === start) {
+        setStuck(true);
+      }
+    }, 8000);
+    return () => clearTimeout(t);
   }, [status, hasBegun]);
 
   // QA6/F1: REM Drift. When the world goes quiet for 12s and

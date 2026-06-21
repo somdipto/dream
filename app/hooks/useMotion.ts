@@ -72,6 +72,17 @@ export function useMotion(
 
   const smoothed = useRef({ pitch: 0, roll: 0, yaw: 0 });
   const yawBaseline = useRef<number | null>(null);
+  // QA16: remember the LAST value we exposed via state so we
+  // can skip setTilt when the deviceorientation event didn't
+  // move the quantized value. 0.5° bins are imperceptible to
+  // the player but cut the React render storm from 60Hz to
+  // typically <5Hz when the phone is held still. With a
+  // fresh value every event the `useMemo` below also re-ran
+  // 60x/s, which cascaded a re-render into every consumer of
+  // the returned wrapper object — DirectorOverlay,
+  // VRView's lookV/lookH, GyroController, etc.
+  const lastExposedRef = useRef({ pitch: 0, roll: 0, yaw: 0 });
+  const TILT_QUANTUM_DEG = 0.5;
 
   const requestPermission = useCallback(async (): Promise<"granted" | "denied" | "unsupported"> => {
     const DOE = (window as any).DeviceOrientationEvent;
@@ -141,6 +152,34 @@ export function useMotion(
         Math.abs(smoothed.current.yaw) < YAW_DEADZONE_DEG ? 0 : smoothed.current.yaw;
       const roll = smoothed.current.roll;
 
+      // QA16: skip the React update if no axis moved by even
+      // one quantum. Most deviceorientation events at rest
+      // jitter by less than 0.5° per axis after EMA + deadzone;
+      // bailing here drops the render rate from 60Hz to ~3-5Hz
+      // when the phone is held still — without this, every
+      // consumer of the motion hook re-renders on every frame,
+      // which both spams React and forces re-creation of the
+      // useMemo wrapper (line 169 below).
+      const q = TILT_QUANTUM_DEG;
+      const last = lastExposedRef.current;
+      if (
+        Math.abs(pitch - last.pitch) < q &&
+        Math.abs(roll - last.roll) < q &&
+        Math.abs(yaw - last.yaw) < q
+      ) {
+        // First event after permission grant — we MUST flip
+        // `available` true so consumers know motion is live.
+        if (!tilt.available) {
+          last.pitch = pitch;
+          last.roll = roll;
+          last.yaw = yaw;
+          setTilt({ pitch, roll, yaw, available: true });
+        }
+        return;
+      }
+      last.pitch = pitch;
+      last.roll = roll;
+      last.yaw = yaw;
       setTilt({ pitch, roll, yaw, available: true });
     };
 
@@ -150,22 +189,21 @@ export function useMotion(
     };
   }, [permission, alpha]);
 
-  // Classify movement + turning from current tilt. Memoized on the
-  // exact threshold values (not the wrapper) so consumers that destructure
-  // the primitives see stable references when the input is stable.
-  const moving: "idle" | "forward" | "backward" = useMemo(
-    () => (tilt.pitch > fwdT ? "forward" : tilt.pitch < backT ? "backward" : "idle"),
-    [tilt.pitch, fwdT, backT],
-  );
-  const turning: "idle" | "left" | "right" = useMemo(
-    () => (tilt.yaw < -lookT ? "left" : tilt.yaw > lookT ? "right" : "idle"),
-    [tilt.yaw, lookT],
-  );
+  // Classify movement + turning from current tilt. The strings
+  // are recomputed every tilt update; that's intentional — they
+  // are cheap. What matters is the wrapper-object memo below
+  // only changes when a primitive the consumer actually reads
+  // changes, not on every orientation event.
+  const moving: "idle" | "forward" | "backward" =
+    tilt.pitch > fwdT ? "forward" : tilt.pitch < backT ? "backward" : "idle";
+  const turning: "idle" | "left" | "right" =
+    tilt.yaw < -lookT ? "left" : tilt.yaw > lookT ? "right" : "idle";
 
-  // Build the returned object WITHOUT putting `moving` / `turning` in
-  // the dep array. The previous version listed them, which changed the
-  // memoized object identity on every tilt update (60 Hz) — that
-  // re-rendered every consumer every frame.
+  // QA16: memoize the returned object only on primitives that
+  // are visible to consumers. With the per-event quantum skip
+  // above, tilt.pitch/roll/yaw change at most ~5Hz when the
+  // phone is still. Without that skip, this object was a new
+  // identity 60x/s and every consumer re-rendered every frame.
   return useMemo(
     () => ({
       pitch: tilt.pitch,
@@ -178,6 +216,7 @@ export function useMotion(
       moving,
       turning,
     }),
-    [tilt.pitch, tilt.roll, tilt.yaw, tilt.available, permission, requestPermission, recalibrate, moving, turning],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tilt.pitch, tilt.roll, tilt.yaw, tilt.available, permission],
   );
 }

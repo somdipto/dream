@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "test": "tsc --target es2022 --module nodenext --moduleResolution nodenext --skipLibCheck --outDir tests/.build tests/qa16-regressions.test.ts app/lib/scene-composer.ts app/lib/event-bus.ts && node --test tests/.build/tests/qa16-regressions.test.js",
     "start": "next start"
   },
   "dependencies": {

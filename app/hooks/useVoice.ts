@@ -95,6 +95,9 @@ export function useVoice(): VoiceControls {
 
   const recRef = useRef<any | null>(null);
   const shouldListenRef = useRef(false);
+  // QA16: consecutive onend-driven restart count, reset on
+  // a successful onresult. See rec.onend for the cap + backoff.
+  const restartCountRef = useRef(0);
   const bufferRef = useRef("");
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finalListenersRef = useRef<Set<(text: string) => void>>(new Set());
@@ -243,6 +246,10 @@ export function useVoice(): VoiceControls {
         // Engine committed a final — fire listeners immediately so the
         // world can mutate without waiting for the silence flush.
         commitBufferAsFinal();
+        // QA16: a real final = recogniser is healthy. Reset
+        // the auto-restart counter so subsequent onend
+        // cycles don't pile onto a previous failure streak.
+        restartCountRef.current = 0;
       }
       // ponytail: interim is what the engine *currently* thinks the user said.
       // We expose the *combined* (buffer + live interim) so the UI shows
@@ -279,13 +286,34 @@ export function useVoice(): VoiceControls {
       // time — Chrome will refuse `start()` on the same instance after
       // it ends once.
       if (shouldListenRef.current) {
+        // QA16: cap restart attempts. Some Android + iOS Safari
+        // builds emit `onerror: aborted` then `onend` in a tight
+        // loop when the user denies microphone access mid-session
+        // or the recogniser is in a bad state — without this cap
+        // we burn recogniser instances at ~5/s and the tab
+        // eventually hangs or the user sees a frozen mic dot.
+        // 5 attempts at 1s, 2s, 4s, 8s, 16s, then give up
+        // until the next user gesture.
+        restartCountRef.current += 1;
+        if (restartCountRef.current > 5) {
+          shouldListenRef.current = false;
+          setError("voice: gave up auto-restart after 5 attempts. Tap mic to try again.");
+          setListening(false);
+          return;
+        }
         // Detach this recogniser's listeners so a delayed onend doesn't
         // double-fire while we're spinning up the next one.
         rec.onresult = null;
         rec.onerror = null;
         rec.onend = null;
         recRef.current = null;
-        // Defer to next tick so any in-flight onresult lands first.
+        // QA16: exponential backoff. 50ms was too aggressive
+        // when the recogniser was returning "aborted" — the
+        // gap between restarts grew linearly but we kept
+        // racing the SDK. 500ms base, doubling per attempt,
+        // gives the browser time to actually settle.
+        const delay = Math.min(500 * 2 ** (restartCountRef.current - 1), 8000);
+        // Defer so any in-flight onresult lands first.
         setTimeout(() => {
           if (!shouldListenRef.current) return;
           try {
@@ -293,7 +321,7 @@ export function useVoice(): VoiceControls {
           } catch {
             // give up — will recover on the next user gesture.
           }
-        }, 50);
+        }, delay);
         return;
       }
       setListening(false);

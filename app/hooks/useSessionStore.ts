@@ -71,10 +71,45 @@ export function useSessionStoreImpl(): UseSessionStore {
     sessionsRef.current = sessions;
   }, [sessions]);
 
+  // QA16: mirror activeId into a ref so updaters inside
+  // setSessions can read the LATEST activeId even when called
+  // from a callback that was built before the most recent
+  // setActive. addScene's callback identity is tied to the
+  // activeId from when it was last memoized; a synchronous
+  // setActive → addScene pair would otherwise see the OLD id.
+  //
+  // The mirroring is done INSIDE the custom setActive wrapper
+  // below (and the other setters that mutate activeId), not
+  // via a post-commit effect — a post-commit effect lags by
+  // one render, which is exactly the bug we are fixing. The
+  // effect below remains as a backstop for any code path
+  // that calls the raw setActiveId directly.
+  const activeIdRef = useRef<string | null>(activeId);
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  // QA16: wrap setActiveId so every update mirrors into
+  // activeIdRef synchronously. Without this, a `setActive +
+  // addScene` pair in the same JS tick would see the OLD
+  // activeIdRef.current inside addScene's updater.
+  const setActiveIdSync = useCallback((next: string | null | ((prev: string | null) => string | null)) => {
+    if (typeof next === "function") {
+      setActiveId((prev) => {
+        const v = (next as (p: string | null) => string | null)(prev);
+        activeIdRef.current = v;
+        return v;
+      });
+    } else {
+      activeIdRef.current = next;
+      setActiveId(next);
+    }
+  }, []);
+
   useEffect(() => {
     const r = loadFromStorage();
     setSessions(r.sessions);
-    setActiveId(r.activeId);
+    setActiveIdSync(r.activeId);
     setRecoveryNotice(r.recovered);
     setHydrated(true);
   }, []);
@@ -102,7 +137,31 @@ export function useSessionStoreImpl(): UseSessionStore {
   useEffect(() => {
     function onStorage() {
       const r = loadFromStorage();
-      setSessions(r.sessions);
+      // QA16: per-session merge — never clobber a fresher local
+      // edit with a stale cross-tab read. Each session is keyed
+      // by id, and we pick the side with the larger `updatedAt`.
+      // A session that exists locally but not in storage is
+      // preserved (it may be mid-write), and a session that
+      // exists only in storage is added.
+      setSessions((prev) => {
+        const byId = new Map<string, Session>();
+        for (const s of prev) byId.set(s.id, s);
+        for (const s of r.sessions) {
+          const ours = byId.get(s.id);
+          if (!ours || (s.updatedAt ?? 0) > (ours.updatedAt ?? 0)) {
+            byId.set(s.id, s);
+          }
+        }
+        return Array.from(byId.values()).sort(
+          (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+        );
+      });
+      // Reconcile activeId — keep the current one if still
+      // present, otherwise take the incoming one.
+      setActiveIdSync((curr) => {
+        if (curr && r.sessions.some((s) => s.id === curr)) return curr;
+        return r.activeId;
+      });
     }
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -135,7 +194,16 @@ export function useSessionStoreImpl(): UseSessionStore {
       // authoritative single-threaded check.
       let added = false;
       setSessions((prev) => {
-        const target = prev.find((s) => s.id === activeId);
+        // QA16: read activeId from the same render-frame ref as
+        // setActive, not from the addScene closure. When the
+        // caller did `setActive(newId); addScene(...)` back to
+        // back, addScene's identity was rebuilt on the next render
+        // and the closure still held the OLD activeId. Using a
+        // ref here means the updater always sees the latest
+        // activeId the React commit has reached. We mirror
+        // activeId into this ref via a tiny effect below.
+        const currActiveId = activeIdRef.current;
+        const target = prev.find((s) => s.id === currActiveId);
         // Dedupe against the active session's last scene within 3s.
         if (target) {
           const last = target.scenes[target.scenes.length - 1];
@@ -156,13 +224,13 @@ export function useSessionStoreImpl(): UseSessionStore {
             updatedAt: now,
             scenes: [scene],
           };
-          setActiveId(newS.id);
+          setActiveIdSync(newS.id);
           added = true;
           return [newS, ...prev];
         }
         added = true;
         return prev.map((s) => {
-          if (s.id !== activeId) return s;
+          if (s.id !== currActiveId) return s;
           const scenes = [...s.scenes, scene];
           return {
             ...s,
@@ -223,7 +291,7 @@ export function useSessionStoreImpl(): UseSessionStore {
         scenes: seedScene ? [seedScene] : [],
       };
       setSessions((prev) => [newS, ...prev]);
-      setActiveId(id);
+      setActiveIdSync(id);
       return id;
     },
     [],
@@ -275,7 +343,7 @@ export function useSessionStoreImpl(): UseSessionStore {
         scenes: copiedScenes,
       };
       setSessions((prev) => [fork, ...prev]);
-      setActiveId(id);
+      setActiveIdSync(id);
       return id;
     },
     [],
@@ -287,14 +355,14 @@ export function useSessionStoreImpl(): UseSessionStore {
     // `sessions` would lag by one render in that case.)
     const target = sessionsRef.current.find((s) => s.id === sessionId);
     if (!target) return null;
-    setActiveId(sessionId);
+    setActiveIdSync(sessionId);
     return target.scenes[target.scenes.length - 1] ?? null;
   }, []);
 
   const deleteSession = useCallback((sessionId: string) => {
     setSessions((prev) => {
       const remaining = prev.filter((s) => s.id !== sessionId);
-      setActiveId((curr) => {
+      setActiveIdSync((curr) => {
         if (curr !== sessionId) return curr;
         // QA2: deleted the active session — fall back to the
         // most-recently-updated remaining session. Previously
@@ -386,11 +454,11 @@ export function useSessionStoreImpl(): UseSessionStore {
     // re-rendering setSessions with an unchanged value still
     // triggers a state update and would be a no-op cycle).
     if (sessionId === null) {
-      setActiveId(null);
+      setActiveIdSync(null);
       return;
     }
     if (sessionsRef.current.some((s) => s.id === sessionId)) {
-      setActiveId(sessionId);
+      setActiveIdSync(sessionId);
       return;
     }
     // Stale id — log and no-op so the journal doesn't get

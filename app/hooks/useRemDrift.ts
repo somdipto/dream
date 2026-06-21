@@ -45,6 +45,16 @@ export function useRemDrift({ onDrift, paused = false }: RemDriftOptions) {
   const lastInputAtRef = useRef<number>(Date.now());
   // Timestamp of the last drift paint. Used for cooldown.
   const lastDriftAtRef = useRef<number>(0);
+  // QA16: anchor the idle clock to mount time, not to the
+  // last-input timestamp of a previous instance. If the
+  // user navigates away from the dream, comes back, and the
+  // last input was > IDLE_MS ago, the first scheduler tick
+  // would otherwise fire a drift within 2s of remount —
+  // the world re-mutates before the user has had a chance
+  // to do anything. The check below requires
+  // `now - mountedAtRef >= IDLE_MS` before any drift can
+  // fire, regardless of what the persisted refs remember.
+  const mountedAtRef = useRef<number>(Date.now());
   // Most-recent onDrift (kept in a ref so the listener identity
   // is stable).
   const onDriftRef = useRef(onDrift);
@@ -82,16 +92,33 @@ export function useRemDrift({ onDrift, paused = false }: RemDriftOptions) {
       },
     );
     // Also bump the timer on every successful text input.
-    function onText() {
+    // QA16: filter out browser shortcut combinations and
+    // non-character keys. Without the filter, a user pressing
+    // F5 to refresh the page (or Cmd+R / Ctrl+R) bumps the
+    // idle clock — meaning the dream never drifts while the
+    // user is doing anything anywhere in the tab. The filter
+    // matches "the user typed something" rather than "the user
+    // pressed a key".
+    function onText(e: KeyboardEvent) {
+      // Skip modifier-prefixed shortcuts — they're browser /
+      // app shortcuts, not the user engaging with the dream.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Skip F-keys, Escape, Tab, and other non-text keys.
+      if (e.key.length === 0) return;
+      if (e.key.startsWith("F") && e.key.length > 1) return;
+      if (e.key === "Escape" || e.key === "Tab") return;
+      noteInput();
+    }
+    function onPointer() {
       noteInput();
     }
     window.addEventListener("keydown", onText);
-    window.addEventListener("pointerdown", onText);
+    window.addEventListener("pointerdown", onPointer);
     return () => {
       offPaint();
       offLoad();
       window.removeEventListener("keydown", onText);
-      window.removeEventListener("pointerdown", onText);
+      window.removeEventListener("pointerdown", onPointer);
     };
   }, []);
 
@@ -109,9 +136,13 @@ export function useRemDrift({ onDrift, paused = false }: RemDriftOptions) {
       const now = Date.now();
       const idleFor = now - lastInputAtRef.current;
       const sinceDrift = now - lastDriftAtRef.current;
+      // QA16: also gate on time-since-mount so a remount
+      // after a long navigation can't drift immediately.
+      const sinceMount = now - mountedAtRef.current;
       if (
         idleFor >= IDLE_MS &&
         sinceDrift >= DRIFT_COOLDOWN_MS &&
+        sinceMount >= IDLE_MS &&
         promptsRef.current.length >= 1
       ) {
         const mash = buildRemPrompt(promptsRef.current);

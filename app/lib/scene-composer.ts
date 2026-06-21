@@ -72,7 +72,13 @@ export function composeScenePrompt({ text, isFirst = false }: ScenePromptOptions
   // desktop default scene's prompt + camera grammar exceeded
   // Reactor's server cap, producing a "prompt too long"
   // error the user couldn't recover from without a refresh.
-  const body = text.trim().replace(/\s+/g, " ").slice(0, MAX_BODY_CHARS);
+  //
+  // QA16: build `body` from `safe`, not raw `text`. A user
+  // pasting `"   \x00   a dragon"` produced `safe = "a dragon"`
+  // but `body = "\x00 a dragon"` — the leading control char
+  // survived into the composed prompt. Using `safe` keeps the
+  // body and subject in lockstep on the same sanitized input.
+  const body = safe.replace(/\s+/g, " ").slice(0, MAX_BODY_CHARS);
 
   return [
     opener,
