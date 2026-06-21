@@ -8,6 +8,7 @@ import { FlickToast } from "./components/FlickToast";
 import { PromptTrail } from "./components/PromptTrail";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { StatusBadge } from "./components/StatusBadge";
+import { ToastCenter } from "./components/ToastCenter";
 import { CommandError } from "./components/CommandError";
 import { VoiceDream } from "./components/VoiceDream";
 import { GyroController } from "./components/GyroController";
@@ -2039,6 +2040,11 @@ function DreamSurface() {
           (spin, dive, lift, roll) paints the world. Shows for 1.2s after
           each flick:prompt event. */}
       <FlickToast />
+
+      {/* Round 7: ToastCenter — surfaces the dream:toast bus event
+          (export success, share-with-no-prompt, etc). Without this
+          component every emit goes to a dead-letter bus. */}
+      <ToastCenter />
 
       {/* Prune toast */}
       {pruneToast && (

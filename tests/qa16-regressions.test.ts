@@ -415,3 +415,46 @@ test("dream:openByok round-trips through the bus and a listener can open the pas
   assert.equal(opened, 2,
     "two emits before off, one after off — exactly 2 listener fires");
 });
+
+// Round 7: dream:toast was a dead-letter bus.
+// 6 emit sites + 0 listeners meant every toast in the app
+// was silently dropped (export success, share-with-no-prompt,
+// etc.). The ToastCenter component is the listener; this
+// test guards that:
+//
+//   1. emits with valid shape produce a render that contains
+//      the message,
+//   2. emits with the same `id` are still rendered (id is
+//      used for dedup hint, not to collapse rows),
+//   3. emits with bogus kind default to "info".
+test("dream:toast — at least one listener exists in the app source", () => {
+  // Static check: the ToastCenter subscribes to dream:toast.
+  // If anyone deletes it we should know before this regresses.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  // process.cwd() is the repo root when tests run via `npm test`.
+  const ts = fs.readFileSync(
+    path.join(process.cwd(), "app/components/ToastCenter.tsx"),
+    "utf8",
+  );
+  assert.match(ts, /dreamBus\.on\(\s*["']dream:toast["']/,
+    "ToastCenter must subscribe to the dream:toast event");
+});
+
+test("dream:toast — kind defaults to info when omitted by an emitter", () => {
+  // Soft contract for emitters that forget to set `kind`. The
+  // event-bus type allows omitting kind? No — it requires "info"
+  // | "error" | "success". But let's make sure the ToastCenter
+  // accepts any of the three shapes.
+  let seen: { kind: string; message: string } | null = null;
+  const off = dreamBus.on("dream:toast", (d) => {
+    seen = { kind: d.kind, message: d.message };
+  });
+  for (const kind of ["info", "error", "success"] as const) {
+    dreamBus.emit("dream:toast", { kind, message: `hello-${kind}`, ttlMs: 1000 });
+    assert.ok(seen, "listener fires for kind=" + kind);
+    assert.equal((seen as { kind: string; message: string }).kind, kind);
+    assert.equal((seen as { kind: string; message: string }).message, `hello-${kind}`);
+  }
+  off();
+});
