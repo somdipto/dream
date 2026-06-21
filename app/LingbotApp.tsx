@@ -149,14 +149,17 @@ function ByokKeyField({ onChanged }: { onChanged?: () => void }) {
   }
 
   if (!open) {
+    // QA18: BYOK link was 11px white/45 (near-invisible). Promote to
+    // a real button — same shape as the primary CTA so it reads as a
+    // co-equal option, not a footnote.
     return (
       <button
         type="button"
         onClick={() => setOpen(true)}
         data-testid="byok-open-btn"
-        className="mt-4 text-[11px] text-white/45 underline-offset-2 hover:text-white/75 hover:underline"
+        className="mt-4 inline-flex items-center justify-center rounded-full border border-white/20 bg-transparent px-5 py-2 text-[12px] font-medium text-white hover:bg-white/10"
       >
-        Use your own Reactor key
+        Use my own Reactor key
       </button>
     );
   }
@@ -2148,7 +2151,12 @@ function ReactorErrorScreen({
   // tab, this is the fastest path to a working session. The
   // server's X-Reactor-User-Key path (M9.12) will use the new key
   // on the next /api/reactor/token call.
-  const [showByokPaste, setShowByokPaste] = useState(false);
+  // QA18: default BYOK paste field to OPEN on credits_depleted — the
+  // user just hit a 402 and needs a paste box, not a tiny link they
+  // have to find. They can still hide it via the collapse control.
+  const [showByokPaste, setShowByokPaste] = useState(
+    classified.reason === "credits_depleted"
+  );
   const [byokDraft, setByokDraft] = useState("");
   const [byokError, setByokError] = useState<string | null>(null);
   // QA5: track whether a user key is currently saved so
@@ -2204,6 +2212,62 @@ function ReactorErrorScreen({
       <p className="mt-3 text-sm leading-relaxed text-white/70">
         {classified.body}
       </p>
+      {/* QA18: BYOK paste field rendered ABOVE the dashboard CTA so
+          it's the first thing the user sees on a credits_depleted
+          error. Default-open (see useState above). */}
+      {showFallbackKeyRetry && showByokPaste && (
+        <form onSubmit={onByokSubmit} className="mt-6 flex flex-col gap-2 rounded-lg border border-white/15 bg-white/[0.04] p-3 text-left">
+          <label
+            htmlFor="reactor-byok-paste"
+            className="text-[11px] uppercase tracking-wider text-white/85"
+          >
+            Paste your Reactor API key
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="reactor-byok-paste"
+              type="password"
+              value={byokDraft}
+              onChange={(e) => {
+                setByokDraft(e.target.value);
+                setByokError(null);
+              }}
+              placeholder="rk_…"
+              autoComplete="off"
+              spellCheck={false}
+              autoFocus
+              data-testid="reactor-error-byok-input"
+              className="min-w-0 flex-1 rounded-md border border-white/20 bg-black/60 px-3 py-2 font-mono text-[12px] text-white placeholder:text-white/35 focus:border-white focus:outline-none"
+            />
+            <button
+              type="submit"
+              data-testid="reactor-error-byok-save"
+              className="rounded-md bg-white px-4 py-2 text-[12px] font-semibold text-black hover:bg-white/90"
+            >
+              Save & retry
+            </button>
+          </div>
+          {byokError ? (
+            <p className="text-[11px] text-white/85" data-testid="reactor-error-byok-error">
+              {byokError}
+            </p>
+          ) : (
+            <p className="text-[10px] text-white/55">
+              Find it at <span className="font-mono">dashboard → API key</span>. Stored only in this browser.
+            </p>
+          )}
+        </form>
+      )}
+      {showFallbackKeyRetry && !showByokPaste && (
+        <button
+          type="button"
+          onClick={() => setShowByokPaste(true)}
+          className="mt-5 inline-flex items-center justify-center rounded-md border border-white/20 bg-white px-5 py-2 text-[12px] font-medium text-black hover:bg-white/90"
+          data-testid="reactor-error-byok-open"
+        >
+          Paste my own key
+        </button>
+      )}
       {classified.ctaLabel && (
         <button
           type="button"
@@ -2223,17 +2287,21 @@ function ReactorErrorScreen({
           className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-5 py-2 text-xs font-medium text-white/85 hover:bg-white/10"
           data-testid="reactor-error-try-fallback"
         >
-          Try a different key
+          Try a different shared key
         </button>
       )}
-      {showFallbackKeyRetry && !showByokPaste && (
+      {/* QA18: hide-by-default pastable is removed — the primary
+          paste field is now the default-open form above the CTA.
+          Users can collapse it by clicking "Try a different shared
+          key" if they don't want to paste their own. */}
+      {showFallbackKeyRetry && showByokPaste && (
         <button
           type="button"
-          onClick={() => setShowByokPaste(true)}
-          className="mt-2 block w-full text-[10px] text-white/45 underline-offset-2 hover:text-white/75 hover:underline"
-          data-testid="reactor-error-byok-open"
+          onClick={() => setShowByokPaste(false)}
+          className="mt-2 text-[10px] text-white/45 underline-offset-2 hover:text-white/75 hover:underline"
+          data-testid="reactor-error-byok-close"
         >
-          Paste your own key
+          Hide paste field
         </button>
       )}
       {/* QA5: when a user key is already saved (a previous
@@ -2245,40 +2313,11 @@ function ReactorErrorScreen({
         <button
           type="button"
           onClick={onRemoveUserKey}
-          className="mt-2 block w-full text-[10px] text-white/45 underline-offset-2 hover:text-white/75 hover:underline"
+          className="mt-2 text-[10px] text-white/45 underline-offset-2 hover:text-white/75 hover:underline"
           data-testid="reactor-error-byok-remove"
         >
-          Remove your key and use the shared one
+          Remove your saved key and use the shared one
         </button>
-      )}
-      {showFallbackKeyRetry && showByokPaste && (
-        <form onSubmit={onByokSubmit} className="mt-3 flex flex-col gap-2">
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={byokDraft}
-              onChange={(e) => {
-                setByokDraft(e.target.value);
-                setByokError(null);
-              }}
-              placeholder="rk_…"
-              autoComplete="off"
-              spellCheck={false}
-              data-testid="reactor-error-byok-input"
-              className="min-w-0 flex-1 rounded-md border border-white/15 bg-black/40 px-2 py-1.5 font-mono text-[11px] text-white placeholder:text-white/30 focus:border-white/40 focus:outline-none"
-            />
-            <button
-              type="submit"
-              data-testid="reactor-error-byok-save"
-              className="rounded-md bg-white px-3 py-1.5 text-[11px] font-medium text-black hover:bg-white/90"
-            >
-              Save & retry
-            </button>
-          </div>
-          {byokError && (
-            <p className="text-[10px] text-white/70">{byokError}</p>
-          )}
-        </form>
       )}
       <button
         type="button"
