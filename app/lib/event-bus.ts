@@ -52,6 +52,10 @@ export interface DreamBusEvents {
    *  paint pipeline as a chip tap or voice final, so the user
    *  can express a world-change with a physical gesture. */
   "flick:prompt": { prompt: string; kind: "spin" | "dive" | "lift" | "roll" };
+  /** F8: emitted by the BYOK fingerprint chip in the topbar when
+   *  the user taps it. The ReactorErrorScreen listens and opens
+   *  its paste field so the user can replace their saved key. */
+  "dream:openByok": Record<string, never>;
 }
 
 type EventName = keyof DreamBusEvents;

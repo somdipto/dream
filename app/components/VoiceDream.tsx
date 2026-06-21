@@ -206,6 +206,10 @@ export function VoiceDream() {
       // write to the journal. This is the only thing that
       // actually catches a paint that races an abort.
       const myEpoch = ++paintEpochRef.current;
+      // Audit fix: clear stale errors the moment a new paint starts.
+      // Without this, a "Generation failed" banner from a previous
+      // failed paint lingers on top of the status card until the
+      // *new* paint completes (or times out).
       setError(null);
       setLastPrompt(text);
       lastPaintedRef.current = text;
@@ -307,6 +311,12 @@ export function VoiceDream() {
           if (!imageAccepted) {
             return "err";
           }
+          // Audit fix: if the user has already started a newer paint
+          // (sidebar pick, rapid re-prompt, Begin restart), drop out
+          // here. Without this guard, setPrompt + start would still
+          // run against the Reactor SDK, generating a world the user
+          // never asked for and consuming their credits.
+          if (myEpoch !== paintEpochRef.current) return "err";
           const composed = opts?.promptOverride ?? buildPrompt(text);
           const prompt = composeScenePrompt({ text: composed, isFirst: !snapshotRef.current?.has_prompt });
           const conditionsReady = new Promise<void>((resolve) => {
@@ -318,6 +328,9 @@ export function VoiceDream() {
           await setPrompt({ prompt });
           await Promise.race([conditionsReady, conditionsTimeout]);
           conditionsReadyRef.current = null;
+          // Re-check epoch after the setPrompt await — another paint
+          // may have started during the 3s conditions window.
+          if (myEpoch !== paintEpochRef.current) return "err";
           await start();
           return "ok";
         } catch {
@@ -350,7 +363,7 @@ export function VoiceDream() {
           seed,
           sessionId: null,
           luma: null,
-          note: "pipeline Promise.race hit 8s timeout",
+          note: "pipeline Promise.race hit 30s timeout",
         });
         if (!snapshotRef.current?.started) setPhase("idle");
         dreamBus.emit("dream:paintDone", { ms: paintMs, ok: false });
@@ -670,7 +683,17 @@ export function VoiceDream() {
 
   async function onShare() {
     const prompt = lastPrompt;
-    if (!prompt) return;
+    if (!prompt) {
+      // Audit fix: previously the share button was visually enabled
+      // before any prompt had been sent, and tapping it silently
+      // no-op'd. Tell the user why instead.
+      dreamBus.emit("dream:toast", {
+        kind: "info",
+        message: "Generate a dream first, then share it.",
+        ttlMs: 3000,
+      });
+      return;
+    }
     const seed = lastSeed ?? hashSeed(prompt + ":" + sessionNonceRef.current.toString(16)) >>> 0;
     const url = buildShareUrl(prompt, seed);
     if (!url) return;
@@ -916,6 +939,23 @@ export function VoiceDream() {
           onChange={(e) => setText(e.target.value)}
           placeholder="…or type a prompt"
           disabled={!ready}
+          onKeyDown={(e) => {
+            // Esc clears the input and returns focus to the
+            // form. Cmd/Ctrl+Enter is an explicit submit
+            // shortcut for users composing multi-line prompts
+            // (where a bare Enter might be ambiguous).
+            if (e.key === "Escape") {
+              if (text) {
+                e.preventDefault();
+                setText("");
+              }
+            } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              const form = (e.currentTarget as HTMLInputElement).form;
+              if (form) form.requestSubmit();
+            }
+          }}
+          aria-label="Type a prompt"
           className="flex-1 rounded-full border border-white/10 bg-black/40 px-4 py-2 text-sm text-white placeholder:text-white/40 focus:border-white/30 focus:outline-none disabled:opacity-40"
         />
         <button

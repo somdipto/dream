@@ -859,6 +859,18 @@ function DreamSurface() {
   const voice = useVoice();
   const sessions = useSessions();
   const [hasBegun, setHasBegun] = useState(false);
+  // F8: persistent BYOK fingerprint chip state. Lives in
+  // DreamSurface (the parent of both the topbar and the error
+  // screen) so the chip and the paste form read the same source
+  // of truth. The chip is rendered in the topbar; the form is
+  // rendered inside the error screen. Both flip here.
+  const [hasUserKey, setHasUserKey] = useState(false);
+  const [userKeyFingerprint, setUserKeyFingerprint] = useState<string | null>(null);
+  useEffect(() => {
+    const k = loadUserKey();
+    setHasUserKey(k !== null);
+    setUserKeyFingerprint(k ? `rk_…${k.slice(-4)}` : null);
+  }, []);
   // QA19 fix: deferred retry timers see `hasBegun` at scheduling
   // time, not at fire time. If the user hits Reset between the
   // schedule and the fire, the retry resurrects the world they
@@ -1739,6 +1751,25 @@ function DreamSurface() {
           )}
         </div>
       </div>
+      {/* F8: persistent BYOK fingerprint chip. When a user has a
+          saved Reactor key, show a small chip with the masked
+          fingerprint so they can confirm at a glance that BYOK is
+          active. Tapping it re-opens the paste flow so they can
+          replace the key. On first mount we lazy-derive the
+          fingerprint from localStorage; the chip only renders
+          once hasUserKey flips to true. */}
+      {hasUserKey && (
+        <button
+          type="button"
+          onClick={() => dreamBus.emit("dream:openByok", {})}
+          data-testid="byok-fingerprint-chip"
+          aria-label="Saved Reactor API key active. Tap to replace."
+          className="pointer-events-auto fixed left-1/2 top-[max(0.75rem,env(safe-area-inset-top))] z-20 -translate-x-1/2 rounded-full border border-white/10 bg-black/40 px-3 py-1 text-[10px] text-white/70 backdrop-blur hover:bg-black/60"
+        >
+          <span className="text-white/50" aria-hidden="true">key </span>
+          {userKeyFingerprint ?? "••••"}
+        </button>
+      )}
     </>
   ) : null;
 
@@ -1821,6 +1852,20 @@ function DreamSurface() {
               classified={classified}
               onRetry={() => void connect()}
               onBack={handleReset}
+              hasUserKey={hasUserKey}
+              userKeyFingerprint={userKeyFingerprint}
+              onUserKeyChanged={(fp) => {
+                // F8: keep the topbar chip in sync with the
+                // paste form. The parent's setters are the
+                // single source of truth.
+                if (fp === null) {
+                  setHasUserKey(false);
+                  setUserKeyFingerprint(null);
+                } else {
+                  setHasUserKey(true);
+                  setUserKeyFingerprint(fp);
+                }
+              }}
             />
           ) : (
             <div className="relative max-w-sm text-center">
@@ -2217,10 +2262,16 @@ function ReactorErrorScreen({
   classified,
   onRetry,
   onBack,
+  hasUserKey: hasUserKeyProp,
+  userKeyFingerprint: userKeyFingerprintProp,
+  onUserKeyChanged,
 }: {
   classified: import("./lib/reactor-errors").ClassifiedReactorError;
   onRetry: () => void;
   onBack: () => void;
+  hasUserKey: boolean;
+  userKeyFingerprint: string | null;
+  onUserKeyChanged: (fingerprint: string | null) => void;
 }) {
   // The credits_depleted CTA points at the dashboard and should
   // open in a new tab (we don't want to navigate away from the
@@ -2258,18 +2309,16 @@ function ReactorErrorScreen({
   const [showByokPaste, setShowByokPaste] = useState(
     classified.reason === "credits_depleted"
   );
+  // F8: subscribe to the chip's "open BYOK" event so the topbar
+  // fingerprint chip can re-open the paste form on tap.
+  useEffect(() => {
+    const off = dreamBus.on("dream:openByok", () => {
+      setShowByokPaste(true);
+    });
+    return off;
+  }, []);
   const [byokDraft, setByokDraft] = useState("");
   const [byokError, setByokError] = useState<string | null>(null);
-  // QA5: track whether a user key is currently saved so
-  // the user has a visible path to remove it. The previous
-  // flow: user pastes a key with a typo → 401 → fatal
-  // (no fall-through) → user sees "API key rejected"
-  // forever. Now they can clear the saved key and retry
-  // with the env pool.
-  const [hasUserKey, setHasUserKey] = useState(false);
-  useEffect(() => {
-    setHasUserKey(loadUserKey() !== null);
-  }, []);
   const onByokSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const v = byokDraft.trim();
@@ -2282,13 +2331,15 @@ function ReactorErrorScreen({
     setByokError(null);
     setByokDraft("");
     setShowByokPaste(false);
-    setHasUserKey(true);
+    // F8: lift the new fingerprint up to DreamSurface so the
+    // persistent topbar chip can re-render.
+    onUserKeyChanged(`rk_…${v.trim().slice(-4)}`);
     bustNextToken();
     onRetry();
   };
   const onRemoveUserKey = () => {
     _clearUserKey();
-    setHasUserKey(false);
+    onUserKeyChanged(null);
     setByokDraft("");
     setByokError(null);
     setShowByokPaste(false);
@@ -2317,7 +2368,7 @@ function ReactorErrorScreen({
           under the error so they know the server is using THEIR key
           (not the env pool's exhausted one) and can verify they
           pasted the right one. */}
-      {showFallbackKeyRetry && hasUserKey && (
+      {showFallbackKeyRetry && hasUserKeyProp && (
         <p
           className="mt-2 text-[11px] font-mono text-white/55"
           data-testid="reactor-error-byok-fingerprint"
@@ -2422,7 +2473,7 @@ function ReactorErrorScreen({
           remove it. Previously the only way to fall back to
           the env pool was to wait for the key to expire, or
           to clear localStorage by hand. */}
-      {showFallbackKeyRetry && hasUserKey && (
+      {showFallbackKeyRetry && hasUserKeyProp && (
         <button
           type="button"
           onClick={onRemoveUserKey}

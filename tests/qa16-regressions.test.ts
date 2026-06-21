@@ -398,3 +398,20 @@ test("session-store: real parse failure DOES set recovered", () => {
   assert.equal(result.recovered, true,
     "real parse failure still sets recovered:true");
 });
+
+// F8: BYOK chip → error screen paste form via event bus.
+// Regression guard: if anyone removes the bus event the
+// topbar fingerprint chip becomes dead and the user can't
+// replace their saved key without dismissing the error.
+test("dream:openByok round-trips through the bus and a listener can open the paste form", () => {
+  let opened = 0;
+  const off = dreamBus.on("dream:openByok", () => {
+    opened += 1;
+  });
+  dreamBus.emit("dream:openByok", {});
+  dreamBus.emit("dream:openByok", {});
+  off();
+  dreamBus.emit("dream:openByok", {});
+  assert.equal(opened, 2,
+    "two emits before off, one after off — exactly 2 listener fires");
+});

@@ -36,6 +36,8 @@ export interface UseSessionStore {
    * the source session/scene wasn't found.
    */
   forkSession: (opts: { sessionId: string; atSceneId?: string }) => string | null;
+  /** F7: download the active (or a chosen) session as a JSON file. */
+  exportSession: (sessionId?: string) => { ok: boolean; filename?: string };
   setActive: (sessionId: string | null) => void;
   /** QA3: toggle the favorite flag on a scene. */
   toggleFavorite: (sceneId: string, sessionId?: string) => void;
@@ -393,6 +395,57 @@ export function useSessionStoreImpl(): UseSessionStore {
     [],
   );
 
+  // F7: Export the active (or a chosen) session as a portable JSON
+  // file. Uses Blob + temporary anchor click — works on iOS Safari,
+  // Android Chrome, and desktop without any third-party lib. The
+  // filename is slugified from the session title for easy sorting in
+  // Downloads.
+  const exportSession = useCallback((sessionId?: string): { ok: boolean; filename?: string } => {
+    const id = sessionId ?? activeIdRef.current;
+    if (!id) return { ok: false };
+    const target = sessionsRef.current.find((s) => s.id === id);
+    if (!target) return { ok: false };
+    const payload = {
+      schema: "dream.session/v1",
+      exportedAt: new Date().toISOString(),
+      id: target.id,
+      title: target.title,
+      createdAt: target.createdAt,
+      updatedAt: target.updatedAt,
+      scenes: target.scenes.map((sc) => ({
+        id: sc.id,
+        prompt: sc.prompt,
+        seed: sc.seed,
+        timestamp: sc.timestamp,
+        favorite: !!sc.favorite,
+      })),
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    // Slugify the title for the filename: keep alnum/dash/underscore,
+    // collapse spaces to dashes, drop everything else, cap at 60 chars.
+    const slug =
+      (target.title || "dream-session")
+        .toLowerCase()
+        .replace(/[^a-z0-9-_]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 60) || "dream-session";
+    const filename = `${slug}-${target.id.slice(0, 8)}.json`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    // Defer revoke so iOS Safari has time to start the download.
+    setTimeout(() => {
+      a.remove();
+      URL.revokeObjectURL(url);
+    }, 1000);
+    return { ok: true, filename };
+  }, []);
+
   const loadSession = useCallback((sessionId: string): Scene | null => {
     // Read from sessionsRef so consecutive calls within the same
     // render see the latest list. (The previous closure-captured
@@ -568,6 +621,7 @@ export function useSessionStoreImpl(): UseSessionStore {
       restoreSession,
       renameSession,
       forkSession,
+      exportSession,
       setActive,
       toggleFavorite,
       recentPrompts,
@@ -592,6 +646,7 @@ export function useSessionStoreImpl(): UseSessionStore {
       restoreSession,
       renameSession,
       forkSession,
+      exportSession,
       setActive,
       toggleFavorite,
       recentPrompts,

@@ -391,6 +391,25 @@ export function SessionSidebar({ open, onClose, onSelectScene, onPickCurated }: 
                       onClose();
                     }
                   }}
+                  onExport={() => {
+                    // F7: download a session's scenes as JSON.
+                    // No UI change other than a toast on success
+                    // so the user can confirm the file saved.
+                    const r = store.exportSession(s.id);
+                    if (r.ok) {
+                      dreamBus.emit("dream:toast", {
+                        kind: "success",
+                        message: `Saved ${r.filename ?? "session"}`,
+                        ttlMs: 2500,
+                      });
+                    } else {
+                      dreamBus.emit("dream:toast", {
+                        kind: "error",
+                        message: "Couldn't export session",
+                        ttlMs: 3000,
+                      });
+                    }
+                  }}
                 />
                 ))}
               </>
@@ -528,6 +547,7 @@ function SessionCard({
   onSelectScene,
   onToggleFavorite,
   onFork,
+  onExport,
 }: {
   session: Session;
   isActive: boolean;
@@ -540,6 +560,7 @@ function SessionCard({
   onSelectScene: (sceneId: string) => void;
   onToggleFavorite: (sceneId: string) => void;
   onFork: (sceneId: string) => void;
+  onExport: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState(session.title);
@@ -620,6 +641,16 @@ function SessionCard({
           className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs text-white/60 hover:bg-white/15 hover:text-white"
         >
           ×
+        </button>
+        <button
+          type="button"
+          onClick={onExport}
+          aria-label="Export session as JSON"
+          title="Download as .json"
+          data-testid="session-export-btn"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 text-xs text-white/60 hover:bg-white/15 hover:text-white"
+        >
+          ↓
         </button>
       </div>
       {isActive && (
