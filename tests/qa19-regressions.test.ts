@@ -125,3 +125,73 @@ test("reactor-errors: unrecognised message classifies as 'unknown' (not terminal
   const c = classifyReactorError("websocket closed unexpectedly");
   assert.equal(c.reason, "unknown");
 });
+
+// ────────────────────────────────────────────────────────────────────
+// BYOK — round-trip a key through save/load and confirm the
+// header forwarding contract. Pins the user-facing recovery flow:
+// when the user pastes their own Reactor key in the credits_depleted
+// error screen, that key must survive a reload and be returned by
+// loadUserKey() so the next /api/reactor/token request can forward
+// it as X-Reactor-User-Key.
+// ────────────────────────────────────────────────────────────────────
+
+const BYOK_STORAGE_KEY = "dream.byok.reactorKey";
+
+test("byok: saves a shape-valid key and reloads the same key", async () => {
+  const { saveUserKey, loadUserKey } = await import("../app/lib/byok.js");
+  const k = "rk_" + "a".repeat(40);
+  assert.equal(saveUserKey(k), true);
+  assert.equal(loadUserKey(), k);
+});
+
+test("byok: trims surrounding whitespace before persisting", async () => {
+  const { saveUserKey, loadUserKey } = await import("../app/lib/byok.js");
+  const k = "rk_" + "b".repeat(40);
+  saveUserKey("  " + k + "\n");
+  assert.equal(loadUserKey(), k);
+});
+
+test("byok: rejects a key that doesn't start with rk_", async () => {
+  const { saveUserKey } = await import("../app/lib/byok.js");
+  assert.equal(saveUserKey("sk_" + "x".repeat(40)), false);
+});
+
+test("byok: rejects a key that is too short", async () => {
+  const { saveUserKey } = await import("../app/lib/byok.js");
+  assert.equal(saveUserKey("rk_abc"), false);
+});
+
+test("byok: rejects a key that contains non-alphanumeric chars", async () => {
+  const { saveUserKey } = await import("../app/lib/byok.js");
+  assert.equal(saveUserKey("rk_" + "x".repeat(20) + "-x" + "y".repeat(20)), false);
+});
+
+test("byok: loadUserKey evicts a garbled-on-disk value", async () => {
+  const { loadUserKey } = await import("../app/lib/byok.js");
+  // Simulate a key that was valid when saved but corrupted since
+  // (e.g. user edited localStorage by hand). loadUserKey must
+  // clean it up and return null so the UI doesn't show a stale
+  // fingerprint for a key that won't work.
+  _store[BYOK_STORAGE_KEY] = "not-a-key";
+  assert.equal(loadUserKey(), null);
+  assert.equal(_store[BYOK_STORAGE_KEY], undefined, "garbled key should be removed");
+});
+
+test("byok: fingerprint shows last 4 chars of the key", async () => {
+  const { saveUserKey, getFingerprint } = await import("../app/lib/byok.js");
+  const k = "rk_" + "c".repeat(40);
+  saveUserKey(k);
+  const fp = getFingerprint();
+  assert.ok(fp, "fingerprint should be present");
+  assert.ok(fp!.endsWith("cccc"), "fingerprint should end in the last 4 chars");
+  assert.ok(fp!.startsWith("***"), "fingerprint should be masked");
+});
+
+test("byok: clearUserKey removes the key from storage", async () => {
+  const { saveUserKey, clearUserKey, loadUserKey } = await import("../app/lib/byok.js");
+  const k = "rk_" + "d".repeat(40);
+  saveUserKey(k);
+  assert.equal(loadUserKey(), k);
+  clearUserKey();
+  assert.equal(loadUserKey(), null);
+});

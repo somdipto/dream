@@ -2224,6 +2224,18 @@ function ReactorErrorScreen({
       <p className="mt-3 text-sm leading-relaxed text-white/70">
         {classified.body}
       </p>
+      {/* When the user has a saved BYOK key, show its fingerprint
+          under the error so they know the server is using THEIR key
+          (not the env pool's exhausted one) and can verify they
+          pasted the right one. */}
+      {showFallbackKeyRetry && hasUserKey && (
+        <p
+          className="mt-2 text-[11px] font-mono text-white/55"
+          data-testid="reactor-error-byok-fingerprint"
+        >
+          Using your key {getFingerprint() ?? "(saved)"}
+        </p>
+      )}
       {/* QA18: BYOK paste field rendered ABOVE the dashboard CTA so
           it's the first thing the user sees on a credits_depleted
           error. Default-open (see useState above). */}
