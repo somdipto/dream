@@ -105,14 +105,21 @@ function matchStyleOrVariant(
       return { kind: isVariant ? "variant" : "style", id: entry.id };
     }
   }
-  // Substring match: "cyberpunk neon" → cyberpunk (the first label token).
+  // Substring match: "cyberpunk neon" → cyberpunk. We only
+  // accept a STYLE label as a *prefix* of a longer first-word
+  // (so "hyper-real" matches "hyper"), never the other way
+  // around. The previous `firstWord.startsWith(entry.label)`
+  // branch matched "rainbow".startsWith("rain") and
+  // "nightmarish".startsWith("night"), then stripped the
+  // user's leading subject from `cleanedPrompt` and routed
+  // the request to the wrong style. A real user-style cue is
+  // always a complete first word, not a prefix of one.
   const firstWord = normalized.split(/\s+/)[0];
   if (!firstWord) return null;
   for (const entry of STYLE_LOOKUP) {
     if (
       entry.label === firstWord ||
-      entry.label.startsWith(firstWord + " ") ||
-      firstWord.startsWith(entry.label)
+      entry.label.startsWith(firstWord + " ")
     ) {
       const isVariant = TIME_VARIANTS.some((v) => v.id === entry.id);
       return { kind: isVariant ? "variant" : "style", id: entry.id };

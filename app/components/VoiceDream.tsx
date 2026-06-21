@@ -607,18 +607,32 @@ export function VoiceDream() {
     return () => clearTimeout(t);
   }, [pulse]);
   useEffect(() => {
-    return dreamBus.on("dream:paintDone", (detail: { ms: number; ok: boolean }) => {
+    // QA16/R3: previous version scheduled a 4s setTimeout inside
+    // the dreamBus.on callback and returned a cleanup from
+    // there — but the bus's listener type is `(detail) => void`,
+    // so the returned function was discarded. After 5 fast
+    // paints, 5 timers were racing to clear the announcement,
+    // the first of which could fire mid-announcement and blank
+    // the live region prematurely (and after unmount, the
+    // stale timer would setState on an unmounted fiber).
+    // We now own the timer in a ref, clear it on every new
+    // event, and clear it on unmount via the effect's own
+    // return.
+    let clearTimer: ReturnType<typeof setTimeout> | null = null;
+    const off = dreamBus.on("dream:paintDone", (detail: { ms: number; ok: boolean }) => {
+      if (clearTimer) clearTimeout(clearTimer);
       if (detail.ok) {
         const seconds = (detail.ms / 1000).toFixed(1);
         setPaintingAnnouncement(`Paint finished in ${seconds} seconds.`);
       } else {
         setPaintingAnnouncement("Paint failed. Your prompt is saved — try again.");
       }
-      const t = setTimeout(() => setPaintingAnnouncement(""), 4000);
-      // Best-effort cleanup; since this is a bus listener the
-      // bus owns the unsubscribe — we only own the timer.
-      return () => clearTimeout(t);
+      clearTimer = setTimeout(() => setPaintingAnnouncement(""), 4000);
     });
+    return () => {
+      off();
+      if (clearTimer) clearTimeout(clearTimer);
+    };
   }, []);
 
   // Re-render the most recent prompt with a fresh seed. Same text,

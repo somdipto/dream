@@ -117,9 +117,18 @@ function expireKeyPoolEntries(now: number) {
 
 // Trust X-Forwarded-For AND X-Real-IP only if we are explicitly
 // behind a reverse proxy (set TRUST_PROXY=1). Without that flag,
-// both headers are fully client-controlled; trusting them lets a
-// single attacker mint unlimited tokens by rotating the header on
-// each request (the rate-limit bucket keys on IP).
+// all of these headers are fully client-controlled; trusting them
+// lets a single attacker mint unlimited tokens by rotating the
+// header on each request (the rate-limit bucket keys on IP).
+//
+// QA16/R3: the previous version also read x-real-ip /
+// cf-connecting-ip / fly-client-ip / true-client-ip from the
+// untrusted path, which is exactly the bypass the trustProxy
+// guard was meant to prevent. We now collapse to a single
+// User-Agent+Accept-Language hash whenever trustProxy is off —
+// every direct connection still gets its own bucket via the UA
+// hash, but the client can no longer swap the bucket by editing
+// a header.
 function clientIp(headers: Headers, trustProxy: boolean): string {
   if (trustProxy) {
     const fwd = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -127,22 +136,6 @@ function clientIp(headers: Headers, trustProxy: boolean): string {
     const real = headers.get("x-real-ip")?.trim();
     if (real) return real;
   }
-  // QA4: even without a proxy, accept X-Real-IP if present
-  // (some edge runtimes set it without the trust flag) but
-  // ALSO try to derive a per-connection key from
-  // CF-Connecting-IP / Fly-Client-IP / True-Client-IP, then
-  // fall back to a SHA-256 of the User-Agent so that all
-  // direct connections do NOT collapse into a single
-  // "unknown" bucket. Without this, every direct request
-  // from a different user shared one 5-burst bucket.
-  const real = headers.get("x-real-ip")?.trim();
-  if (real) return real;
-  const cf = headers.get("cf-connecting-ip")?.trim();
-  if (cf) return cf;
-  const fly = headers.get("fly-client-ip")?.trim();
-  if (fly) return fly;
-  const tci = headers.get("true-client-ip")?.trim();
-  if (tci) return tci;
   // Last resort: bucket by User-Agent + Accept-Language hash.
   // QA5: mixing Accept-Language into the hash makes the
   // bucket stable across browser updates. Previously the

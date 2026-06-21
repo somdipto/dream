@@ -100,7 +100,43 @@ function Thumbnail({ seed, alt }: { seed: number; alt: string }) {
   const [url, setUrl] = useState<string | null>(thumbCache.get(seed) ?? null);
   useEffect(() => {
     if (url) return;
-    void loadThumb(seed, setUrl);
+    // QA16/R3: previous version unconditionally called
+    // setUrl from inside an unawaited loadThumb. If the user
+    // scrolled past a still-loading thumbnail (closing the
+    // sidebar before the image finished), the promise would
+    // resolve on an unmounted component and leak the blob
+    // URL into `thumbCache` for the rest of the session.
+    // mountedRef gates the setUrl and revokes the blob URL
+    // we just minted if the component unmounted before the
+    // image landed.
+    let mounted = true;
+    let mintedUrl: string | null = null;
+    void loadThumb(seed, (s) => {
+      if (!mounted) {
+        // The component is gone. If we minted a fresh URL
+        // here, the cache would hold it forever — revoke it
+        // immediately so the bytes are GC'd.
+        if (s && s.startsWith("blob:") && !thumbCache.has(seed)) {
+          URL.revokeObjectURL(s);
+        }
+        return;
+      }
+      if (s && s.startsWith("blob:")) mintedUrl = s;
+      setUrl(s);
+    });
+    return () => {
+      mounted = false;
+      // Only revoke URLs we minted ourselves; cache URLs are
+      // shared with other thumbnails and live as long as the
+      // cache does.
+      if (mintedUrl) {
+        // Cache may already hold this URL by now — if so,
+        // we want to keep it. If not, revoke.
+        if (thumbCache.get(seed) !== mintedUrl) {
+          URL.revokeObjectURL(mintedUrl);
+        }
+      }
+    };
   }, [seed, url]);
   if (!url) {
     return (

@@ -360,22 +360,30 @@ export function useSessionStoreImpl(): UseSessionStore {
   }, []);
 
   const deleteSession = useCallback((sessionId: string) => {
-    setSessions((prev) => {
-      const remaining = prev.filter((s) => s.id !== sessionId);
-      setActiveIdSync((curr) => {
-        if (curr !== sessionId) return curr;
-        // QA2: deleted the active session — fall back to the
-        // most-recently-updated remaining session. Previously
-        // this returned null, leaving the user with no active
-        // pointer and the next paint auto-creating a brand-new
-        // session. (Audit bug #19.)
-        if (remaining.length === 0) return null;
-        const mostRecent = [...remaining].sort(
-          (a, b) => b.updatedAt - a.updatedAt,
-        )[0];
-        return mostRecent.id;
-      });
-      return remaining;
+    // QA16/R3: previous version called setActiveIdSync from
+    // inside the setSessions updater. React may discard the
+    // first updater invocation under concurrent rendering
+    // (and the strict-mode dev double-invocation does this
+    // every render), which leaves the inner setState with a
+    // potentially stale snapshot. Compute the next active id
+    // here from sessionsRef.current — a plain ref read, no
+    // React magic — and dispatch the two setStates as sibling
+    // calls outside the updater.
+    const remaining = sessionsRef.current.filter((s) => s.id !== sessionId);
+    setSessions(remaining);
+    const curr = sessionsRef.current.find((s) => s.id === sessionId) ? sessionId : null;
+    setActiveIdSync((prev) => {
+      if (prev !== curr) return prev;
+      // QA2: deleted the active session — fall back to the
+      // most-recently-updated remaining session. Previously
+      // this returned null, leaving the user with no active
+      // pointer and the next paint auto-creating a brand-new
+      // session. (Audit bug #19.)
+      if (remaining.length === 0) return null;
+      const mostRecent = [...remaining].sort(
+        (a, b) => b.updatedAt - a.updatedAt,
+      )[0];
+      return mostRecent.id;
     });
   }, []);
 

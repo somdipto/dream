@@ -436,16 +436,27 @@ export function DesktopDream() {
   // same outcome channel. Keep the strings short so screen
   // readers don't queue-spam.
   useEffect(() => {
-    return dreamBus.on("dream:paintDone", (detail: { ms: number; ok: boolean }) => {
+    // QA16/R3: see VoiceDream — the bus discards return
+    // values from listener callbacks, so the previous
+    // "return () => clearTimeout(t)" was a silent no-op and
+    // every paint leaked a 4s timer. Track the timer id in
+    // a closure cell, clear it on every new event, and
+    // clear it on unmount.
+    let clearTimer: ReturnType<typeof setTimeout> | null = null;
+    const off = dreamBus.on("dream:paintDone", (detail: { ms: number; ok: boolean }) => {
+      if (clearTimer) clearTimeout(clearTimer);
       if (detail.ok) {
         const seconds = (detail.ms / 1000).toFixed(1);
         setPaintingAnnouncement(`Paint finished in ${seconds} seconds.`);
       } else {
         setPaintingAnnouncement("Paint failed. Your prompt is saved — try again.");
       }
-      const t = setTimeout(() => setPaintingAnnouncement(""), 4000);
-      return () => clearTimeout(t);
+      clearTimer = setTimeout(() => setPaintingAnnouncement(""), 4000);
     });
+    return () => {
+      off();
+      if (clearTimer) clearTimeout(clearTimer);
+    };
   }, []);
 
   // Desktop voice: push-to-talk via spacebar OR the mic button. Same
@@ -539,10 +550,18 @@ export function DesktopDream() {
     const last = sessions.activeSession?.scenes[sessions.activeSession.scenes.length - 1];
     if (last && snapshot?.has_image === false) {
       restoredRef.current = true;
-      setTimeout(() => {
+      // QA16/R3: previous version scheduled a 500ms setTimeout
+      // with no cleanup. If `has_image` flipped true within
+      // those 500ms (a slow first paint landing), the effect
+      // re-ran, the early-return on `restoredRef.current`
+      // skipped, but the original timer was still pending and
+      // fired a second paint for the same scene. We now store
+      // the timer and clear it on effect re-run or unmount.
+      const t = setTimeout(() => {
         setText(last.prompt);
         void paintDream(last.prompt, { seed: last.seed });
       }, 500);
+      return () => clearTimeout(t);
     } else {
       restoredRef.current = true;
     }

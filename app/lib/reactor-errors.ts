@@ -103,14 +103,27 @@ export function classifyReactorError(message: string | null | undefined): Classi
   // QA16: same canonical-prefix fix — `m.includes("401")` matched
   // the substring anywhere (a 401-line message, a $401 invoice).
   // Match the canonical HTTP status-code prefixes that the SDK /
-  // fetch layer actually emit. We still keep the "unauthorized"
-  // / "api key" substring checks because the server message body
-  // uses those phrases naturally (and they are unambiguous in
-  // the context of a Reactor error string).
+  // fetch layer actually emit.
+  //
+  // QA16/R3: the previous `m.includes("api key")` branch matched
+  // any error message that mentioned "api key" as a substring,
+  // including billing / usage messages that the upstream service
+  // prepends with "api key quota" and a generic 4xx whose body
+  // contains the words "api key required". Those are NOT auth
+  // failures — they are quota or 4xx-class errors. We now require
+  // a stronger signal: the canonical "rejected / invalid / not
+  // authorized / unauthorized" form, which is what the SDK and
+  // the Reactor service actually emit on a real key rejection.
   if (
     /\b(?:http|status|code)\s*[:=]?\s*401\b/.test(m) ||
+    /\b(?:http|status|code)\s*[:=]?\s*403\b/.test(m) ||
     m.includes("unauthorized") ||
-    m.includes("api key")
+    m.includes("not authorized") ||
+    m.includes("api key rejected") ||
+    m.includes("api_key_rejected") ||
+    m.includes("api key invalid") ||
+    m.includes("api_key_invalid") ||
+    m.includes("invalid api key")
   ) {
     return { ...KNOWN.auth };
   }

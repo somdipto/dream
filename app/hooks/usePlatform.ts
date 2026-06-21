@@ -34,6 +34,20 @@ export function usePlatform(): PlatformInfo {
   });
 
   useEffect(() => {
+    // QA16/R3: `hasKeyboard` was previously aliased to
+    // `isDesktop`, which conflated two independent signals
+    // (an iMac with no keyboard, an iPad with a Smart
+    // Keyboard). We now treat hasKeyboard as a "we have
+    // observed the user typing" signal — set the first time
+    // a `keydown` fires and never cleared. The signal is
+    // session-local, so a user who plugs in a keyboard mid-
+    // session gets `hasKeyboard: true` from that point on.
+    let hasKeyboard = false;
+    const onFirstKey = () => {
+      if (hasKeyboard) return;
+      hasKeyboard = true;
+      detect();
+    };
     function detect() {
       const fine = window.matchMedia("(pointer: fine)").matches;
       const coarse = window.matchMedia("(pointer: coarse)").matches;
@@ -51,10 +65,10 @@ export function usePlatform(): PlatformInfo {
       // disambiguates.
       const isDesktop = fine && hover && !isMobileUa;
       const isMobile = coarse || isMobileUa;
-      const hasKeyboard = isDesktop;
       setInfo({ isDesktop, isMobile, hasKeyboard });
     }
     detect();
+    window.addEventListener("keydown", onFirstKey, { once: true });
 
     // Subscribe to media-query changes so attaching/detaching a mouse
     // or keyboard (e.g. an iPad into its keyboard dock) re-detects
@@ -65,10 +79,44 @@ export function usePlatform(): PlatformInfo {
       window.matchMedia("(hover: hover)"),
     ];
     const mqListener = () => detect();
-    for (const q of queries) q.addEventListener("change", mqListener);
+    // QA16/R3: Safari < 14 only exposes the legacy
+    // MediaQueryList.addListener / removeListener API. The
+    // addEventListener call is a silent no-op on those
+    // versions, so live changes never re-detected. Feature-
+    // detect and fall back.
+    function addMqListener(
+      q: MediaQueryList,
+      fn: (ev: MediaQueryListEvent) => void,
+    ) {
+      if (typeof q.addEventListener === "function") {
+        q.addEventListener("change", fn);
+      } else if (typeof (q as unknown as {
+        addListener?: (fn: (ev: MediaQueryListEvent) => void) => void;
+      }).addListener === "function") {
+        (q as unknown as {
+          addListener: (fn: (ev: MediaQueryListEvent) => void) => void;
+        }).addListener(fn);
+      }
+    }
+    function removeMqListener(
+      q: MediaQueryList,
+      fn: (ev: MediaQueryListEvent) => void,
+    ) {
+      if (typeof q.removeEventListener === "function") {
+        q.removeEventListener("change", fn);
+      } else if (typeof (q as unknown as {
+        removeListener?: (fn: (ev: MediaQueryListEvent) => void) => void;
+      }).removeListener === "function") {
+        (q as unknown as {
+          removeListener: (fn: (ev: MediaQueryListEvent) => void) => void;
+        }).removeListener(fn);
+      }
+    }
+    for (const q of queries) addMqListener(q, mqListener);
     window.addEventListener("resize", mqListener);
     return () => {
-      for (const q of queries) q.removeEventListener("change", mqListener);
+      window.removeEventListener("keydown", onFirstKey);
+      for (const q of queries) removeMqListener(q, mqListener);
       window.removeEventListener("resize", mqListener);
     };
   }, []);

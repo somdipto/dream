@@ -66,12 +66,14 @@ export function loadFromStorage(): LoadResult {
   }
   const sessions = extractSessions(parsed);
   // Only treat as "recovered" if the parsed shape had a recognizable
-  // sessions array but yielded zero results. An empty-but-valid
-  // `{ version:1, sessions: [] }` (user deleted everything) must NOT
-  // surface a recovery banner — that's a clean-slate device.
+  // sessions array AND the raw array contained items that did not
+  // parse. An empty-but-valid `{ version:1, sessions: [] }` (user
+  // deleted everything, or a fresh install) must NOT surface a
+  // recovery banner — that's a clean-slate device.
   const hadSessionsKey =
     parsed && typeof parsed === "object" && Array.isArray((parsed as any).sessions);
-  if (sessions.length === 0 && hadSessionsKey) {
+  const rawCount = hadSessionsKey ? ((parsed as any).sessions as unknown[]).length : 0;
+  if (sessions.length === 0 && hadSessionsKey && rawCount > 0) {
     // Storage had a sessions array but nothing parsed out — partial
     // write or schema drift. Back up the raw blob so the user has
     // a chance to recover it from devtools.

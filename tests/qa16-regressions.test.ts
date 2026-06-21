@@ -232,3 +232,169 @@ test("flickToPrompt: same kind -> same string (deterministic)", () => {
     assert.equal(flickToPrompt(k), flickToPrompt(k));
   }
 });
+
+// QA16/R3 regression tests — round-3 audit fixes
+import { parseVoiceStyle } from "../app/lib/voice-style-parser";
+
+test("parseVoiceStyle: word-as-prefix of a style/variant label does NOT trigger a match", () => {
+  // QA16/R3: the previous matchStyleOrVariant had a
+  // `firstWord.startsWith(entry.label)` branch. It matched
+  // "rainbow".startsWith("rain"), "nightmare".startsWith("night"),
+  // "defaulted".startsWith("default"), and stripped the user's
+  // leading subject from `cleanedPrompt`. The fix requires the
+  // STYLE label to be a *prefix of a longer first word*, never
+  // the other way around — a real style cue is a complete word,
+  // not a prefix.
+  const r1 = parseVoiceStyle("a dragon in rainbow style");
+  assert.equal(r1.styleId, null, "rainbow style must NOT route to rain");
+  assert.equal(r1.variantId, null, "rainbow style must NOT route to rain variant");
+  assert.equal(r1.cleanedPrompt, "a dragon in rainbow style",
+    "user's subject must survive — leading clause must not be stripped");
+
+  // Use a leading clause that doesn't itself look like a time
+  // variant — otherwise the time-intro pass would legitimately
+  // match and we'd be testing the wrong thing.
+  const r2 = parseVoiceStyle("a castle in nightmare vibes");
+  assert.equal(r2.styleId, null, "nightmare vibes must NOT route to night");
+  assert.equal(r2.variantId, null, "nightmare vibes must NOT route to night variant");
+  assert.equal(r2.cleanedPrompt, "a castle in nightmare vibes",
+    "subject must survive the nightmare prefix trap");
+
+  const r3 = parseVoiceStyle("a defaulted car");
+  assert.notEqual(r3.styleId, "default",
+    "leading 'defaulted' must not strip the subject to a style chip");
+});
+
+test("parseVoiceStyle: exact-match style/variant still works", () => {
+  // Regression guard — make sure the prefix-fix didn't break
+  // the legitimate matches.
+  const r = parseVoiceStyle("a misty forest in noir style");
+  assert.equal(r.styleId, "noir", "noir style still routes to noir");
+  // The cleaned prompt should retain the subject but drop
+  // the style-intro clause.
+  assert.ok(r.cleanedPrompt.includes("misty forest"),
+    "subject must survive when style is genuine");
+  assert.ok(!r.cleanedPrompt.includes("noir"),
+    "style clause must be stripped when matched");
+
+  const v = parseVoiceStyle("a beach at sunset");
+  assert.equal(v.variantId, "sunset", "at sunset still routes to sunset variant");
+  assert.ok(v.cleanedPrompt.includes("beach"),
+    "subject must survive when time-of-day is genuine");
+});
+
+test("classifyReactorError: 'api key' substring is not enough — must include an auth verb", () => {
+  // QA16/R3: the previous `m.includes(\"api key\")` branch
+  // mis-routed any error whose message contained the literal
+  // substring. Reactor's billing / usage emails contain \"api
+  // key quota\" and the SDK's 4xx bodies contain \"api key
+  // required\" — those are quota / 4xx errors, not auth
+  // rejections. The fix requires an explicit auth verb
+  // (\"rejected\", \"invalid\", \"unauthorized\") so quota
+  // messages fall through to their proper bucket.
+  assert.notEqual(
+    classifyReactorError("api key quota exceeded for this month").reason,
+    "auth",
+    "quota message must NOT route to auth",
+  );
+  assert.notEqual(
+    classifyReactorError("api key required but missing in request").reason,
+    "auth",
+    "'required' alone must NOT route to auth",
+  );
+  assert.notEqual(
+    classifyReactorError("error: api key not configured for endpoint").reason,
+    "auth",
+    "'not configured' must NOT route to auth",
+  );
+  // Canonical forms still route correctly.
+  assert.equal(
+    classifyReactorError("api key rejected by Reactor").reason,
+    "auth",
+    "rejected still routes to auth",
+  );
+  assert.equal(
+    classifyReactorError("invalid api key provided").reason,
+    "auth",
+    "invalid still routes to auth",
+  );
+  assert.equal(
+    classifyReactorError("HTTP 401 unauthorized").reason,
+    "auth",
+    "HTTP 401 still routes to auth",
+  );
+  assert.equal(
+    classifyReactorError("HTTP 403 forbidden").reason,
+    "auth",
+    "HTTP 403 now routes to auth (was unclassified before)",
+  );
+});
+
+// QA16/R3: session-store empty-array recovery regression
+import { loadFromStorage, saveToStorage } from "../app/lib/session-store";
+function withStorage<T>(fn: () => T): T {
+  // Node 22 doesn't have a global `Storage`, but
+  // session-store uses `window.localStorage` which in the
+  // current implementation requires a `window` shim too.
+  // Build the smallest fake that matches the surface
+  // session-store touches.
+  const g = globalThis as unknown as {
+    window?: {
+      localStorage: {
+        getItem: (k: string) => string | null;
+        setItem: (k: string, v: string) => void;
+        removeItem: (k: string) => void;
+      };
+    };
+  };
+  const hadWindow = "window" in g;
+  const prevWindow = g.window;
+  const store = new Map<string, string>();
+  g.window = {
+    localStorage: {
+      getItem: (k) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k, v) => { store.set(k, v); },
+      removeItem: (k) => { store.delete(k); },
+    },
+  };
+  try { return fn(); } finally {
+    if (hadWindow) g.window = prevWindow; else delete g.window;
+  }
+}
+
+test("session-store: empty sessions array is NOT a recovery event", () => {
+  // QA16/R3: the previous `sessions.length === 0 && hadSessionsKey`
+  // branch treated a fresh device's empty `{\"version\":1,
+  // \"sessions\":[]}` as a recovery event and showed a banner
+  // \"We restored your previous sessions\" on first install.
+  // We now also require `rawCount > 0` — a parseable but empty
+  // array is a clean slate.
+  const result = withStorage(() => {
+    saveToStorage([], null);
+    return loadFromStorage();
+  });
+  assert.equal(result.sessions.length, 0, "empty store stays empty");
+  assert.equal(result.recovered, false,
+    "empty array must NOT trigger recovered:true (was showing banner)");
+});
+
+test("session-store: real parse failure DOES set recovered", () => {
+  // Regression guard — the empty-array fix must not break the
+  // original corruption-detection behavior. A blob with a
+  // sessions array that doesn't parse out into anything should
+  // still flag recovered:true and back the blob up.
+  const result = withStorage(() => {
+    (globalThis as unknown as { window: { localStorage: { setItem: (k: string, v: string) => void } } }).window.localStorage.setItem(
+      "lingbot.sessions.v1",
+      JSON.stringify({
+        version: 1,
+        sessions: [{ id: "garbage", not_a_session: true }],
+      }),
+    );
+    return loadFromStorage();
+  });
+  assert.equal(result.sessions.length, 0,
+    "garbage sessions don't materialize");
+  assert.equal(result.recovered, true,
+    "real parse failure still sets recovered:true");
+});

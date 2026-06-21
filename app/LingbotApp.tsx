@@ -1207,11 +1207,16 @@ function DreamSurface() {
     const isConnectingLike =
       status === "connecting" || status === "waiting" || status === "disconnected";
     if (!isConnectingLike) {
-      // Some other state (e.g. "error") — don't trip the
-      // stuck detector, the error pill is doing that work.
-      // But also don't reset the clock, because the SDK
-      // may soon return to "connecting" and the 8s window
-      // should keep ticking from the original disconnect.
+      // QA16/R3: previously we kept the original start instant
+      // when the SDK landed in a classified terminal state
+      // (e.g. "error"). On retry, `connectingSinceRef` was still
+      // the OLD start time, so the next "connecting" run would
+      // use the residual 8s window — the user saw "Try a
+      // different key" almost immediately after pressing retry.
+      // We now treat any non-connecting state as a fresh start
+      // boundary: clear the ref so the next connecting run
+      // re-begins the 8s budget from zero.
+      connectingSinceRef.current = null;
       return;
     }
     // Start the clock the first time we enter a
