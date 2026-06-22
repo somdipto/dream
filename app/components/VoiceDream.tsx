@@ -331,8 +331,13 @@ export function VoiceDream() {
           // run against the Reactor SDK, generating a world the user
           // never asked for and consuming their credits.
           if (myEpoch !== paintEpochRef.current) return "err";
-          const composed = opts?.promptOverride ?? buildPrompt(text);
-          const prompt = composeScenePrompt({ text: composed, isFirst: !snapshotRef.current?.has_prompt });
+          // The prompt is exactly what the user said — no wrapper, no
+          // preset/variant suffix, no opener, no camera grammar.
+          // `promptOverride` is used by the curated-scene / share-URL
+          // paths, where the source is already a complete description
+          // from the curator. `buildPrompt` (style+variant suffixes)
+          // is bypassed entirely so the model sees the user's text.
+          const prompt = composeScenePrompt({ text: opts?.promptOverride ?? text });
           const conditionsReady = new Promise<void>((resolve) => {
             conditionsReadyRef.current = resolve;
           });

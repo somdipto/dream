@@ -2218,7 +2218,7 @@ function DesktopDefaultScene({
         );
         await Promise.race([imageAccepted, acceptedTimeout]);
         imageAcceptedResolverRef.current = null;
-        await setPrompt({ prompt: composeScenePrompt({ text: prompt, isFirst: true }) });
+        await setPrompt({ prompt: composeScenePrompt({ text: prompt }) });
         await start();
         // Save the default as the first scene of the active session.
         sessions.addScene({ prompt, seed });

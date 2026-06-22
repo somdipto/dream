@@ -64,7 +64,7 @@ export function DreamFeed({ sessions, onReplay, max = 12 }: DreamFeedProps) {
 
   return (
     <div
-      className="pointer-events-auto fixed bottom-44 left-0 right-0 z-30 flex justify-center px-3 md:bottom-32"
+      className="pointer-events-auto fixed bottom-[10.5rem] left-0 right-0 z-30 flex justify-center px-3 md:bottom-32"
       data-testid="dream-feed"
     >
       <div className="max-w-full">

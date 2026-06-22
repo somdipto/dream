@@ -275,8 +275,7 @@ export function DesktopDream() {
           if (!imageAccepted) {
             return "err";
           }
-          const composed = opts?.promptOverride ?? buildPrompt(t);
-          const prompt = composeScenePrompt({ text: composed, isFirst: !snapshotRef.current?.has_prompt });
+          const prompt = composeScenePrompt({ text: opts?.promptOverride ?? t });
           const conditionsReady = new Promise<void>((resolve) => {
             conditionsReadyRef.current = resolve;
           });

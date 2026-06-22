@@ -86,7 +86,7 @@ function QuickFlickStrip({
 
   return (
     <div
-      className="pointer-events-auto fixed bottom-28 left-1/2 z-40 flex -translate-x-1/2 gap-3 rounded-full border border-white/15 bg-black/60 px-3 py-1.5 shadow-lg backdrop-blur md:bottom-16"
+      className="pointer-events-auto fixed bottom-[7.5rem] left-1/2 z-40 flex -translate-x-1/2 gap-3 rounded-full border border-white/15 bg-black/60 px-3 py-1.5 shadow-lg backdrop-blur md:bottom-16"
       data-testid="quick-flick-strip"
     >
       {PRESETS.map((p) => (
