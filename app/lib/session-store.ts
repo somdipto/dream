@@ -51,12 +51,20 @@ export function loadFromStorage(): LoadResult {
     // to recover it from devtools, and signal the UI. We don't auto-
     // overwrite — the next save only fires if the user does something,
     // and by then we want them to have seen the recovery prompt.
+    //
+    // QA17: key format is now `CORRUPT_BACKUP_KEY.<ts>.<rand>` —
+    // matching the partial-write branch below. The previous format
+    // (`CORRUPT_BACKUP_KEY.<ts>`) had segment[1] = ts, but
+    // restoreCorruptBackup parses segment[3] as ts. The two writers
+    // disagreed on the key layout, so a JSON-level corruption event
+    // produced a key the restore-sorter saw as ts=0, and an older
+    // backup (or one written by the partial branch) always sorted
+    // first. Restoration order is now stable across both writers.
     // eslint-disable-next-line no-console
     console.warn("[session-store] corrupt JSON in storage; backing up", e);
     try {
-      const ts = Date.now();
       window.localStorage.setItem(
-        `${CORRUPT_BACKUP_KEY}.${ts}`,
+        `${CORRUPT_BACKUP_KEY}.${Date.now()}.${Math.floor(Math.random() * 1e6)}`,
         raw.slice(0, 100_000),
       );
     } catch {
