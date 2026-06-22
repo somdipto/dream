@@ -387,31 +387,25 @@ export async function GET(req: Request) {
   // cost (pool is bounded by key count, typically <10).
   expireKeyPoolEntries(Date.now());
   const ip = clientIp(req.headers, process.env.TRUST_PROXY === "1");
-  if (!takeToken(ip)) {
-    return NextResponse.json(
-      { error: "Too many token requests — slow down" },
-      {
-        status: 429,
-        headers: { "Retry-After": "10", "Cache-Control": "no-store" },
-      },
-    );
-  }
 
-  const { count } = keyPool.load(process.env);
-  // M9.12: BYOK — accept a per-request user-supplied key in the
-  // `X-Reactor-User-Key` header. Shape-validated. The user key
-  // is tried FIRST (in front of the env pool) and the env pool
-  // acts as a fallback if the user key 402s. This means a user
-  // who pastes their own key never has to wait for the server's
-  // keys to be exhausted before their key gets a turn.
+  // R11-1: validate the request shape and key-pool state
+  // BEFORE charging the rate-limit bucket. The previous
+  // order consumed a token even on a 500 "no keys" 400
+  // "malformed user key" 401 "user-key auth failed"
+  // response — meaning a user hitting any of those errors
+  // got penalized with a 10s rate-limit window ON TOP OF
+  // the real error. For a fresh deployment with an empty
+  // pool, the user would see "no keys" the first time,
+  // then get throttled for 10s while they tried to paste
+  // their own key. The 10s penalty made the recovery
+  // path feel broken.
   //
-  // Auth-failure (401/403) on the user key is fatal — we don't
-  // fall through to the env pool. The user pasted a malformed
-  // key and silently using the server's key instead would
-  // mask their typo. We surface the 401 so they can correct it.
-  const userKeyInfo = extractUserKey(req);
-
-  if (count === 0 && !userKeyInfo.present) {
+  // We do the cheap header / key-pool inspection first,
+  // and only charge the bucket when we're about to make
+  // a real network call upstream.
+  const userKeyInfoEarly = extractUserKey(req);
+  const { count: earlyCount } = keyPool.load(process.env);
+  if (earlyCount === 0 && !userKeyInfoEarly.present) {
     return NextResponse.json(
       {
         error:
@@ -419,13 +413,10 @@ export async function GET(req: Request) {
       },
       {
         status: 500,
-        // R10-3: Vary on X-Reactor-User-Key. A user
+        // R10-3: Vary on X-Reactor-User-Key so a user
         // pasting their own key on an empty-pool
-        // deployment would otherwise hit the same
-        // "no key" 500 as a user without their own
-        // key. The error message even tells them to
-        // paste a key — Vary on the header so a CDN
-        // doesn't poison the response.
+        // deployment doesn't get a cached "no key" 500
+        // served to them by a CDN.
         headers: {
           "Cache-Control": "no-store",
           Vary: "X-Reactor-User-Key",
@@ -433,7 +424,7 @@ export async function GET(req: Request) {
       },
     );
   }
-  if (userKeyInfo.present && "malformed" in userKeyInfo) {
+  if (userKeyInfoEarly.present && "malformed" in userKeyInfoEarly) {
     return NextResponse.json(
       {
         error:
@@ -453,6 +444,49 @@ export async function GET(req: Request) {
       },
     );
   }
+
+  // Now charge the rate-limit bucket — we know we're about
+  // to do real work.
+  if (!takeToken(ip)) {
+    return NextResponse.json(
+      { error: "Too many token requests — slow down" },
+      {
+        status: 429,
+        // R11-2: Vary on X-Reactor-User-Key. A user
+        // pasting their own key while the rate-limit
+        // window is still open used to hit a cached
+        // 429 served to them by a CDN. Their legitimate
+        // BYOK path was blocked by someone else's burst.
+        headers: {
+          "Retry-After": "10",
+          "Cache-Control": "no-store",
+          Vary: "X-Reactor-User-Key",
+        },
+      },
+    );
+  }
+
+  const { count } = keyPool.load(process.env);
+  // M9.12: BYOK — accept a per-request user-supplied key in the
+  // `X-Reactor-User-Key` header. Shape-validated. The user key
+  // is tried FIRST (in front of the env pool) and the env pool
+  // acts as a fallback if the user key 402s. This means a user
+  // who pastes their own key never has to wait for the server's
+  // keys to be exhausted before their key gets a turn.
+  //
+  // Auth-failure (401/403) on the user key is fatal — we don't
+  // fall through to the env pool. The user pasted a malformed
+  // key and silently using the server's key instead would
+  // mask their typo. We surface the 401 so they can correct it.
+  //
+  // R11: `userKeyInfo` and `count` were already validated
+  // BEFORE we charged the rate-limit bucket (R11-1) and
+  // Vary is set on all the error responses. The early-return
+  // 500 / 400 blocks above already short-circuited the
+  // no-key and malformed-key cases — the duplicates that
+  // used to live here are now dead code and have been
+  // removed.
+  const userKeyInfo = userKeyInfoEarly;
 
   // Try the user key first if present.
   if (userKeyInfo.present && "key" in userKeyInfo) {

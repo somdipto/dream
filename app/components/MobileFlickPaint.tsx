@@ -128,27 +128,26 @@ export function MobileFlickPaint({
   /** Optional sink for analytics / logging. */
   onPaint?: (kind: string, prompt: string) => void;
 }) {
-  // The FlickPaint pipeline emits onto dreamBus as a
-  // "flick:prompt" event, so any component (DesktopDream,
-  // MobileDream, the voice pipeline) can listen for it the
-  // same way it listens for chip taps. The bridge in
-  // LingbotApp translates "flick:prompt" into the same
-  // paint flow the rest of the app uses.
-  useEffect(() => {
-    const off = dreamBus.on(
-      "flick:prompt",
-      (d: { prompt: string; kind: string }) => {
-        onPaint?.(d.kind, d.prompt);
-      },
-    );
-    return off;
-  }, [onPaint]);
-
+  // R11-3: the previous version emitted onto dreamBus inside
+  // useMotionFlicks' onFlick, then immediately re-listened for
+  // the same event inside this component to forward it to
+  // onPaint. That was a redundant roundtrip — by the time
+  // the listener fired, dreamBus had already dispatched the
+  // event to other subscribers (the actual paint pipeline in
+  // LingbotApp). Calling onPaint directly here is cheaper,
+  // avoids a setTimeout-0 hop on the bus, and removes a
+  // possible ordering bug where the listener attached
+  // AFTER the first emit missed the event.
+  //
+  // The flick:prompt bus event is still emitted (for the
+  // QuickFlickStrip path below, which uses the bus to
+  // dispatch), so external subscribers are unchanged.
   useMotionFlicks({
     paused: !enabled || voiceListening,
     onFlick: (e) => {
       const prompt = flickToPrompt(e.kind);
       dreamBus.emit("flick:prompt", { kind: e.kind, prompt });
+      onPaint?.(e.kind, prompt);
     },
   });
 
