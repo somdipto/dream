@@ -173,18 +173,12 @@ export function DirectorOverlay() {
         </>
       )}
 
-      {/* Vignette: radial gradient darkens corners. */}
-      {look.vignette > 0 && (
-        <div
-          className="absolute inset-0 transition-opacity duration-700 ease-out"
-          style={{
-            opacity: look.vignette,
-            background:
-              "radial-gradient(ellipse at center, rgba(0,0,0,0) 35%, rgba(0,0,0,0.85) 100%)",
-          }}
-          data-testid="director-vignette"
-        />
-      )}
+      {/* R11: vignette removed. The old radial gradient
+          darkened the corners — even though it was a black
+          gradient, the user asked for "completely black"
+          with no gradients anywhere. The darken-corners
+          effect is dropped. Vignette state is still
+          honored in the model, just not rendered. */}
 
       {/* Film grain: SVG turbulence pattern, tiled. */}
       {look.grain > 0 && (

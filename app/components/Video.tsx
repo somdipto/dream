@@ -348,8 +348,13 @@ export function Video() {
           pulseTick > 0 ? "animate-[dream-pulse_700ms_ease-out_forwards]" : "opacity-0",
         ].join(" ")}
         style={{
-          background:
-            "radial-gradient(ellipse at center, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.0) 60%)",
+          // R11: pure black — no radial gradient overlay. The
+          // old soft-white radial made the black background
+          // read as "a faint light in a black room" instead of
+          // pure void. A brief 30% white opacity ring on first
+          // paint signaled "something is happening" but the
+          // user explicitly asked for "completely black".
+          background: "#000000",
         }}
       />
 

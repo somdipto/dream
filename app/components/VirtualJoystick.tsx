@@ -169,10 +169,11 @@ export function VirtualJoystick({ enabled }: { enabled: boolean }) {
       className="pointer-events-auto absolute inset-0 z-10 md:hidden"
       style={{
         touchAction: "none",
-        background: dragging
-          ? "radial-gradient(circle at 50% 50%, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0) 60%)"
-          : "transparent",
-        transition: "background 200ms ease-out",
+        // R11: pure black — no radial gradient under the
+        // finger. The old 4%-white radial halo was a tiny
+        // gradient but the user said "completely black" so
+        // we drop it.
+        background: "transparent",
       }}
     >
       {!dragging && (

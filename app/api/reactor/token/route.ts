@@ -417,7 +417,20 @@ export async function GET(req: Request) {
         error:
           "No Reactor API key is available. Set REACTOR_API_KEYS on the server, or paste your own key in the app.",
       },
-      { status: 500, headers: { "Cache-Control": "no-store" } },
+      {
+        status: 500,
+        // R10-3: Vary on X-Reactor-User-Key. A user
+        // pasting their own key on an empty-pool
+        // deployment would otherwise hit the same
+        // "no key" 500 as a user without their own
+        // key. The error message even tells them to
+        // paste a key — Vary on the header so a CDN
+        // doesn't poison the response.
+        headers: {
+          "Cache-Control": "no-store",
+          Vary: "X-Reactor-User-Key",
+        },
+      },
     );
   }
   if (userKeyInfo.present && "malformed" in userKeyInfo) {
@@ -426,7 +439,18 @@ export async function GET(req: Request) {
         error:
           "Pasted Reactor key is malformed. It should look like rk_<40+ characters>.",
       },
-      { status: 400, headers: { "Cache-Control": "no-store" } },
+      {
+        status: 400,
+        // R10-1: Vary on the user-key header so a shared
+        // cache can't serve one user's 400 ("malformed")
+        // response to a user with a different (or absent)
+        // header value. The 400 is keyed off the header
+        // content, not the URL.
+        headers: {
+          "Cache-Control": "no-store",
+          Vary: "X-Reactor-User-Key",
+        },
+      },
     );
   }
 
@@ -459,7 +483,18 @@ export async function GET(req: Request) {
     if (r.upstreamStatus === 401 || r.upstreamStatus === 403) {
       return NextResponse.json(
         { error: r.error },
-        { status: 401, headers: { "Cache-Control": "no-store" } },
+        {
+          status: 401,
+          // R10-2: Vary on X-Reactor-User-Key. This
+          // 401 was a response to a specific user-pasted
+          // key. A CDN serving two users from the same
+          // edge could return user A's "bad key" 401 to
+          // user B. Vary on the header keying the error.
+          headers: {
+            "Cache-Control": "no-store",
+            Vary: "X-Reactor-User-Key",
+          },
+        },
       );
     }
     // 402: user key is exhausted. Fall through to the env pool
@@ -482,6 +517,9 @@ export async function GET(req: Request) {
 
   // Walk healthy keys in order. Stop at the first success.
   const tried = new Set<number>();
+  // Pool with user-key error tracked separately so a malformed or
+  // exhausted user key gets a useful response even when the env
+  // pool is empty.
   let lastResult: TokenFailure | null = null;
   while (tried.size < count) {
     const healthy = keyPool.healthy();
@@ -564,7 +602,16 @@ export async function GET(req: Request) {
       if (keyPool.healthy().length === 0) {
         return NextResponse.json(
           { error: result.error },
-          { status: 401, headers: { "Cache-Control": "no-store" } },
+          {
+            status: 401,
+            // R10-2: Vary on X-Reactor-User-Key so a CDN
+            // doesn't serve user A's "all keys rejected"
+            // 401 to user B's request from the same edge.
+            headers: {
+              "Cache-Control": "no-store",
+              Vary: "X-Reactor-User-Key",
+            },
+          },
         );
       }
       continue;

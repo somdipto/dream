@@ -66,6 +66,10 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
   const keysRef = useRef<Set<string>>(new Set());
   const mouseRef = useRef({ x: 0, y: 0 }); // -1..1, 0=center
   const sensitivityRef = useRef<number>(SENSITIVITY_DEFAULT);
+  // R10-4: statusRef is declared further down (the existing one
+  // from QA11). tick() reads from it so post-mount reconnects
+  // don't leave the listener bound to a stale "disconnected"
+  // value.
   const [sensitivity, setSensitivityState] = useState<number>(SENSITIVITY_DEFAULT);
   const lastSent = useRef<{
     movement: Movement;
@@ -185,7 +189,10 @@ export function DesktopController({ enabled }: { enabled: boolean }) {
     // Skip sending commands while the SDK is not ready. Lingbot
     // rejects commands with "cannot send command while status is
     // disconnect must be ready" otherwise.
-    if (status !== "ready") return;
+    // R10-4: read status from the ref so a post-mount reconnect
+    // doesn't leave the listeners bound to a stale "disconnected"
+    // value.
+    if (statusRef.current !== "ready") return;
     // 1. Movement. WASD wins. Arrow keys share the same slot for
     //    movement so the keyboard layout stays intuitive (↑ = forward,
     //    ↓ = back).
