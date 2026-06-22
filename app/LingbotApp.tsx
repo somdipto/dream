@@ -21,6 +21,7 @@ import { SessionSidebar } from "./components/SessionSidebar";
 import { VRView } from "./components/VRView";
 import { VirtualJoystick } from "./components/VirtualJoystick";
 import { SessionProvider, useSessions } from "./components/SessionProvider";
+import { SurpriseButton } from "./components/SurpriseButton";
 import { useMotion } from "./hooks/useMotion";
 import { useVoice } from "./hooks/useVoice";
 import { useRemDrift } from "./hooks/useRemDrift";
@@ -1655,6 +1656,7 @@ function DreamSurface() {
             </button>
             <StatusBadge />
           </div>
+          <SurpriseButton />
           <CommandError />
           {platform.isMobile && motion.permission === "denied" && (
             <p
