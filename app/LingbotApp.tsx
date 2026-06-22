@@ -1610,13 +1610,19 @@ function DreamSurface() {
     <>
       <div className="pointer-events-none fixed inset-x-0 top-0 z-20 flex items-start justify-between gap-3 p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <div className="pointer-events-auto flex flex-col items-start gap-2">
+          {/* R11: tap targets. Same 40px→48px bump as the
+              mobile action bar. iOS HIG / WCAG both want
+              ≥ 44×44. The old h-10 w-10 (40px) was
+              under-threshold; on phones with a thick
+              system-bar (iPhone 14 Pro etc.) the user's
+              thumb was just barely catching the edge. */}
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
               aria-label="Open saved sessions"
               data-testid="sessions-btn"
-              className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-black/40 text-white/80 backdrop-blur hover:bg-black/60"
+              className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-black/40 text-white/80 backdrop-blur hover:bg-black/60 sm:h-10 sm:w-10"
             >
               ☰
             </button>
@@ -1629,7 +1635,7 @@ function DreamSurface() {
               onClick={() => setShortcutsOpen(true)}
               aria-label="Show keyboard shortcuts"
               data-testid="shortcuts-btn"
-              className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-black/40 text-xs text-white/80 backdrop-blur hover:bg-black/60"
+              className="grid h-12 w-12 place-items-center rounded-full border border-white/10 bg-black/40 text-xs text-white/80 backdrop-blur hover:bg-black/60 sm:h-10 sm:w-10"
             >
               ?
             </button>
@@ -1646,7 +1652,7 @@ function DreamSurface() {
               data-testid="ambient-toggle"
               data-ambient-on={ambient.isOn ? "true" : "false"}
               className={[
-                "grid h-10 w-10 place-items-center rounded-full border text-xs backdrop-blur transition-colors",
+                "grid h-12 w-12 place-items-center rounded-full border text-xs backdrop-blur transition-colors sm:h-10 sm:w-10",
                 ambient.isOn
                   ? "border-white bg-white/20 text-white hover:bg-white/25"
                   : "border-white/10 bg-black/40 text-white/80 hover:bg-black/60",

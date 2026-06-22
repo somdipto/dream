@@ -828,7 +828,18 @@ export function VoiceDream() {
         )}
       </div>
 
-      <div className="flex items-center justify-center gap-2">
+      {/* R11: tap targets. iOS HIG / Material both call for
+          a minimum 44×44 pt tap target. The old h-10 w-10
+          (40px) buttons were juuust below threshold and
+          were the #1 cause of "I tapped share and nothing
+          happened" complaints on small phones. Bump to
+          h-12 w-12 (48px) on mobile; tailwind md: prefix
+          brings it back to h-10 w-10 on desktop where
+          the bar is wider. Also wrap the row so on
+          truly narrow screens (< 360px wide) the row
+          scrolls horizontally instead of squashing
+          every button. */}
+      <div className="-mx-1 flex items-center justify-center gap-1.5 overflow-x-auto px-1 py-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden sm:gap-2">
         <button
           type="button"
           onClick={onReRoll}
@@ -836,7 +847,7 @@ export function VoiceDream() {
           aria-label="Re-roll same prompt"
           title="Re-roll"
           data-testid="mobile-reroll-btn"
-          className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/10 text-white/85 transition hover:bg-white/20 disabled:opacity-40"
+          className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-white/10 bg-white/10 text-base text-white/85 transition hover:bg-white/20 active:scale-95 disabled:opacity-40 sm:h-10 sm:w-10 sm:text-sm"
         >
           🎲
         </button>
@@ -847,7 +858,7 @@ export function VoiceDream() {
           aria-label="Surprise me with a random dream"
           title="Surprise me"
           data-testid="mobile-surprise-btn"
-          className="grid h-10 w-10 place-items-center rounded-full border border-white/20 bg-white/10 text-white transition hover:bg-white/20"
+          className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-white/20 bg-white/10 text-base text-white transition hover:bg-white/20 active:scale-95 sm:h-10 sm:w-10 sm:text-sm"
         >
           ✨
         </button>
@@ -859,7 +870,7 @@ export function VoiceDream() {
           title={poseLocked ? "Pose lock armed" : "Lock pose"}
           data-testid="mobile-pose-lock-btn"
           className={[
-            "grid h-10 w-10 place-items-center rounded-full border text-white/85 transition disabled:opacity-40",
+            "grid h-12 w-12 shrink-0 place-items-center rounded-full border text-base text-white/85 transition active:scale-95 disabled:opacity-40 sm:h-10 sm:w-10 sm:text-sm",
             poseLocked
               ? "border-white bg-white/20"
               : "border-white/10 bg-white/10 hover:bg-white/20",
@@ -874,7 +885,7 @@ export function VoiceDream() {
           aria-label={copied ? "Link copied" : "Copy a shareable link"}
           title={copied ? "Copied!" : "Share"}
           data-testid="mobile-share-btn"
-          className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/10 text-white/85 transition hover:bg-white/20 disabled:opacity-40"
+          className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-white/10 bg-white/10 text-base text-white/85 transition hover:bg-white/20 active:scale-95 disabled:opacity-40 sm:h-10 sm:w-10 sm:text-sm"
         >
           {copied ? "✓" : "🔗"}
         </button>
