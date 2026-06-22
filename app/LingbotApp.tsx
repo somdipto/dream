@@ -20,6 +20,7 @@ import { DesktopDream } from "./components/DesktopDream";
 import { SessionSidebar } from "./components/SessionSidebar";
 import { VRView } from "./components/VRView";
 import { VirtualJoystick } from "./components/VirtualJoystick";
+import { DreamFeed, replayScene } from "./components/DreamFeed";
 import { SessionProvider, useSessions } from "./components/SessionProvider";
 import { SurpriseButton } from "./components/SurpriseButton";
 import { useMotion } from "./hooks/useMotion";
@@ -2048,6 +2049,24 @@ function DreamSurface() {
           (spin, dive, lift, roll) paints the world. Shows for 1.2s after
           each flick:prompt event. */}
       <FlickToast />
+
+      {/* F10: Recent dreams feed. Horizontal strip across the bottom
+          of the world showing the user's most recent scenes across all
+          sessions, newest first. Tapping a chip replays that scene
+          using its stored seed (same path the sidebar's scene click
+          uses). Hidden until at least one scene has been painted. */}
+      {hasBegun && (
+        <DreamFeed
+          sessions={sessions.sessions}
+          onReplay={(scene) => {
+            // Emit through the same bus the VoiceDream / DesktopDream
+            // components listen on — they will treat this as a fresh
+            // paint and run the standard image_accepted / seed_image
+            // path.
+            replayScene(scene);
+          }}
+        />
+      )}
 
       {/* Round 7: ToastCenter — surfaces the dream:toast bus event
           (export success, share-with-no-prompt, etc). Without this
