@@ -21,6 +21,7 @@ import { SessionSidebar } from "./components/SessionSidebar";
 import { VRView } from "./components/VRView";
 import { VirtualJoystick } from "./components/VirtualJoystick";
 import { DreamFeed, replayScene } from "./components/DreamFeed";
+import { SaveFrameButton } from "./components/SaveFrameButton";
 import { SessionProvider, useSessions } from "./components/SessionProvider";
 import { SurpriseButton } from "./components/SurpriseButton";
 import { useMotion } from "./hooks/useMotion";
@@ -1749,6 +1750,12 @@ function DreamSurface() {
           >
             {platform.isMobile ? "↻" : "Reset"}
           </button>
+          {/* F11: Save Frame — captures the current video frame and
+              downloads it as a PNG. Same path as the sidebar's per-
+              scene download, but captures WHAT THE USER IS CURRENTLY
+              LOOKING AT (live canvas) rather than replaying the
+              scene's stored prompt+seed. */}
+          <SaveFrameButton />
           {platform.isMobile && (
             <button
               onClick={() => setVrMode(true)}
