@@ -97,18 +97,15 @@ function FeedChip({
   onPick: () => void;
 }) {
   const [thumb, setThumb] = useState<string | null>(null);
-  // mountedRef: we mint a blob URL when the seed image resolves. If
-  // the chip unmounts (sidebar closes, scene deleted) before the
-  // URL is committed, revoke it so we don't leak a blob.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
 
   useEffect(() => {
+    // Per-effect cancellation flag. We deliberately do NOT share a
+    // mountedRef across effects — when `entry.scene.seed` changes,
+    // both effects' cleanups run in unmount order, and the first
+    // one's `mountedRef.current = false` would make the second
+    // one's "are we unmounting?" check return true even though
+    // the component is still mounted. Using a local `cancelled`
+    // scoped to this effect's closure is the right primitive.
     let minted: string | null = null;
     let cancelled = false;
     void (async () => {
@@ -121,16 +118,14 @@ function FeedChip({
         if (!blob || cancelled) return;
         const url = URL.createObjectURL(blob);
         minted = url;
-        if (mountedRef.current) setThumb(url);
+        if (!cancelled) setThumb(url);
       } catch {
-        // Thumbnail failed — show a letter chip instead.
+        // Thumbnail failed — show a seed chip instead.
       }
     })();
     return () => {
       cancelled = true;
-      if (minted && mountedRef.current === false) {
-        // Chip unmounted before the thumbnail committed — revoke
-        // so the bytes can be GC'd.
+      if (minted) {
         URL.revokeObjectURL(minted);
       }
     };
