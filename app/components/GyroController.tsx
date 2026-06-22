@@ -109,9 +109,27 @@ export function GyroController({
     // Gentle pitch (below the walk threshold) → look up/down. Reuses the
     // same axis: tipping top toward user (positive pitch) means "look
     // down at the ground in front of you", like checking your phone.
+    //
+    // R11-4: the previous windows were (12, 30) and (-25, -10). Beyond
+    // 30° (up to the 38° walk threshold) and beyond -25° (up to the
+    // -35° back-walk threshold) the look-axis was silently "idle" —
+    // a dead zone where neither look-up/down nor walk fired. The user
+    // would tilt their phone a little further expecting "look down a
+    // bit more" and get no feedback. Now we treat anything forward of
+    // 12° (up to but NOT past the walk threshold) as "look down", and
+    // anything back of -10° (down to but NOT past the walk threshold)
+    // as "look up". Movement takes priority: if pitch is at walk
+    // strength we don't bother emitting a look command because the
+    // walk command implicitly looks where they're going.
+    //
+    // We only apply lookV when the *movement* axis is idle. When the
+    // user is walking forward at 40° pitch, we don't ALSO emit
+    // "look down" — that's two commands fighting for the same axis.
     let lookV: LookV = "idle";
-    if (pitch > 12 && pitch < 30) lookV = "down";
-    else if (pitch < -10 && pitch > -25) lookV = "up";
+    if (movement === "idle") {
+      if (pitch > 12) lookV = "down";
+      else if (pitch < -10) lookV = "up";
+    }
 
     if (movement !== lastSent.current.movement) {
       setMovement({ movement });
