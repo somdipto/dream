@@ -483,17 +483,37 @@ async function doDownload(
   // paint's URL will land in the bus's "last image url"
   // bucket (see Video.tsx and VoiceDream.tsx — they keep
   // it up to date on every snapshot).
+  //
+  // Round 9 fix: snapshot the URL BEFORE we emit loadScene so
+  // we can detect whether the paintDone that fires afterwards
+  // was for our scene or for a paint the user triggered in
+  // the meantime. Without this, if the user clicks "download"
+  // and within 6s starts typing a new scene, the in-flight
+  // download grabs the NEW scene's PNG and saves it under
+  // the old filename.
+  const beforeUrl = readLastImageUrl();
   dreamBus.emit("dream:abortPaint", {} as never);
   dreamBus.emit("dream:loadScene", { prompt: scene.prompt, seed: scene.seed });
   let url: string | undefined;
   let done = false;
+  let accepted = false;
   const unsubscribeDone = dreamBus.on("dream:paintDone", (detail: { ok: boolean }) => {
+    if (done) return;
     if (detail.ok) {
-      done = true;
-      url = readLastImageUrl();
-    } else {
-      done = true;
+      const candidate = readLastImageUrl();
+      // Only accept the FIRST new URL we see after asking.
+      // If the user triggers a different paint in between
+      // (e.g. starts typing a new prompt), its URL will
+      // also be different from beforeUrl — we must not
+      // claim it. The `accepted` flag locks in the first
+      // match, and the chain on line 473 prevents two
+      // downloads from racing for the same paintDone.
+      if (!accepted && candidate && candidate !== beforeUrl) {
+        url = candidate;
+        accepted = true;
+      }
     }
+    done = true;
   });
   try {
     for (let i = 0; i < 30; i++) {

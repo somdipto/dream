@@ -112,6 +112,11 @@ export function VoiceDream() {
   // commands) and on a new paint starting before the previous one
   // has been scheduled.
   const repaintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Round 9: mounted flag for paintDream's post-pipeline
+  // setState block. The pipeline takes up to 30s; we set
+  // this false on unmount so the resolved path can short-
+  // circuit instead of writing to a torn-down fiber.
+  const mountedRef = useRef(true);
 
   // Wrap the state callback in useCallback with stable deps so the
   // SDK doesn't unsubscribe/resubscribe on every render.
@@ -201,6 +206,15 @@ export function VoiceDream() {
         return;
       }
       inFlightRef.current = true;
+      // Round 9: snapshot whether we're still mounted at the
+      // start of the paint. The pipeline takes up to 30s and
+      // a route change / parent unmount can fire before we
+      // resolve. Without this guard, every setState in the
+      // post-pipeline block runs on an unmounted fiber and
+      // (a) wastes work, (b) leaves the journal + bus in
+      // inconsistent states if a parallel paintDreamRef caller
+      // gets a different (also-unmounted) instance.
+      const wasMounted = mountedRef.current;
       // QA5: bump the epoch. Any success commit that completes
       // AFTER the epoch has advanced is stale and must not
       // write to the journal. This is the only thing that
@@ -342,6 +356,12 @@ export function VoiceDream() {
 
       const result = await Promise.race([pipeline, timeoutPromise]);
       if (timeoutId) clearTimeout(timeoutId);
+      // Round 9: if we unmounted during the paint, skip every
+      // setState in this block. The bus emit and the
+      // inFlightRef reset below are safe to skip too — no one
+      // is listening to the bus on a torn-down instance and
+      // the ref is per-instance anyway.
+      if (!wasMounted) return;
       // QA4: emit dream:paintDone on ALL outcomes (success,
       // failure, timeout) so the StatusBadge can show "failed"
       // in red. Previously only success emitted; failure left
@@ -589,13 +609,24 @@ export function VoiceDream() {
   // 250ms still polluted the active journal with a phantom
   // shared-dream entry. Now both the addScene and the paint
   // happen inside the timer; unmount cancels both.
+  // Round 9 fix: capture the ACTIVE session ID at schedule
+  // time, not at fire time. If the user switches sessions
+  // within the 250ms window (e.g. taps a different sidebar
+  // item), the shared scene must still be added to the
+  // session that was active when the URL opened.
   useEffect(() => {
     const shared = readDreamFromUrl();
     if (!shared) return;
     setLastPrompt(shared.prompt);
     setLastSeed(shared.seed);
     setText(shared.prompt);
+    // Capture the active session ID NOW, before the timer.
+    const targetSessionId = sessions.activeSession?.id ?? null;
     const t = setTimeout(() => {
+      // First, ensure the target session is active. If the
+      // user switched away during the window, we switch back.
+      if (targetSessionId) sessions.setActive(targetSessionId);
+      // Then add the scene — it will go to the now-active session.
       sessions.addScene({ prompt: shared.prompt, seed: shared.seed });
       void paintDreamRef.current(shared.prompt, { seed: shared.seed });
     }, 250);
@@ -606,8 +637,11 @@ export function VoiceDream() {
 
   // On unmount, cancel any deferred re-paint so a torn-down SDK
   // provider doesn't receive paint commands from a queued tail.
+  // Round 9: also flip mountedRef so the in-flight paint's
+  // post-pipeline setState block short-circuits.
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       if (repaintTimerRef.current !== null) {
         clearTimeout(repaintTimerRef.current);
         repaintTimerRef.current = null;

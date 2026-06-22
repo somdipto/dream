@@ -236,6 +236,6 @@ export function useMotion(
       turning,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tilt.pitch, tilt.roll, tilt.yaw, tilt.available, permission],
+    [tilt.pitch, tilt.roll, tilt.yaw, tilt.available, permission, fwdT, backT, lookT],
   );
 }

@@ -52,6 +52,11 @@ export function useAmbient({ enabled, paused = false, duckWhileListening = false
   // freshest value without re-binding each other.
   const DUCKED_GAIN = 0.25;
   const duckRef = useRef(false);
+  // Round 9: mirror `paused` into a ref so the on() callback
+  // can check it without re-binding on every `paused` flip.
+  // The pause effect itself re-runs on `paused` changes
+  // (line 154), so the ref just needs to stay in sync.
+  const pausedRef = useRef(paused);
   const duckWhileListeningRef = useRef(duckWhileListening);
   const ctxRef = useRef<AudioContext | null>(null);
   const masterRef = useRef<GainNode | null>(null);
@@ -162,6 +167,7 @@ export function useAmbient({ enabled, paused = false, duckWhileListening = false
     // AudioContext throws `InvalidStateError` — unhandled
     // and noisy in the console. Guard on the live state.
     if (ctx.state === "closed") return;
+    pausedRef.current = paused;
     if (paused) {
       try { void ctx.suspend(); } catch { /* closed mid-flight */ }
     } else {
@@ -293,7 +299,14 @@ export function useAmbient({ enabled, paused = false, duckWhileListening = false
     const ctx = ensureContext();
     if (!ctx) return;
     if (ctx.state === "closed") return;
-    try { void ctx.resume(); } catch { /* closed mid-flight */ }
+    // Round 9: honor `paused`. If ambient is toggled on
+    // while paused=true, the AudioContext must NOT resume.
+    // The pause effect at line 160 only re-runs on `paused`
+    // changes — not on ambient toggles — so this is the
+    // only place we can stop the audio.
+    if (!pausedRef.current) {
+      try { void ctx.resume(); } catch { /* closed mid-flight */ }
+    }
     const master = masterRef.current;
     if (master) {
       const t = ctx.currentTime;
@@ -316,7 +329,12 @@ export function useAmbient({ enabled, paused = false, duckWhileListening = false
     // live world.
     pendingPatchRef.current = DEFAULT_PATCH;
     currentPatchRef.current = DEFAULT_PATCH;
-  }, []);
+    // Round 9: honor `paused` here too. If ambient is
+    // toggled on while paused=true (e.g. VR mode is
+    // active), the AudioContext must NOT resume — the
+    // pause effect only fires on `paused` changes, not
+    // on ambient toggles.
+  }, [paused]);
 
   const off = useCallback(() => {
     const ctx = ctxRef.current;

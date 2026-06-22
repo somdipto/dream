@@ -87,6 +87,13 @@ export function useVoice(): VoiceControls {
 
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
+  // Round 9: mirror `interim` into a ref so commit() can read
+  // the latest value without depending on it. The state is
+  // read on every commit, but binding `interim` into the
+  // callback's deps makes the callback re-create itself
+  // every time the user speaks (5-15 times/sec) which
+  // re-binds every consumer that memoizes on `commit`.
+  const interimRef = useRef("");
   const [final, setFinal] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // QA4: live mic level. Updated ~20 times/sec while the
@@ -127,6 +134,7 @@ export function useVoice(): VoiceControls {
     if (!text) return;
     setFinal(text);
     bufferRef.current = "";
+    interimRef.current = "";
     setInterim("");
     finalListenersRef.current.forEach((cb) => {
       try {
@@ -241,6 +249,7 @@ export function useVoice(): VoiceControls {
     shouldListenRef.current = true;
     setError(null);
     bufferRef.current = "";
+    interimRef.current = "";
     setInterim("");
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -276,6 +285,7 @@ export function useVoice(): VoiceControls {
       // We expose the *combined* (buffer + live interim) so the UI shows
       // everything spoken so far, with the live portion visibly highlighted.
       const live = bufferRef.current + (liveInterim ? " " + liveInterim : "");
+      interimRef.current = live;
       setInterim(live);
       armSilenceFlush();
     };
@@ -374,6 +384,20 @@ export function useVoice(): VoiceControls {
       } catch {
         // idempotent — ignore
       }
+      // Round 9: also detach the recogniser's handlers and
+      // null recRef. Without this, a delayed onresult/onerror
+      // from the failed `rec` can still fire into the
+      // closure, mutating bufferRef / interim state and
+      // possibly re-triggering the auto-restart loop from
+      // a stale instance.
+      try {
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+      } catch {
+        // some implementations throw on assignment — ignore
+      }
+      recRef.current = null;
       setError(e?.message ?? String(e));
       shouldListenRef.current = false;
       setListening(false);
@@ -445,15 +469,18 @@ export function useVoice(): VoiceControls {
 
   const commit = useCallback((): string | null => {
     flushSilence();
-    const text = (bufferRef.current + (interim ? " " + interim : "")).trim();
+    const liveInterim = interimRef.current;
+    const text = (bufferRef.current + (liveInterim ? " " + liveInterim : "")).trim();
     if (!text) return null;
     commitBufferAsFinal();
     return text;
-  }, [interim, flushSilence, commitBufferAsFinal]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flushSilence, commitBufferAsFinal]);
 
   const reset = useCallback(() => {
     setFinal(null);
     bufferRef.current = "";
+    interimRef.current = "";
     setInterim("");
     flushSilence();
   }, [flushSilence]);
